@@ -1,37 +1,37 @@
 package groupjson
 
-// 定义组过滤的逻辑模式
+// GroupMode 定义分组筛选的逻辑模式。
 type GroupMode int
 
 const (
-	// 表示字段只要属于任一指定分组即包含在结果中（默认）
+	// ModeOr 字段属于任一指定分组即包含（默认）。
 	ModeOr GroupMode = iota
-	// 表示字段必须同时属于所有指定组才包含在结果中
+	// ModeAnd 字段必须同时属于所有指定分组才包含。
 	ModeAnd
 )
 
 const (
-	// 默认最大递归深度
+	// DefaultMaxDepth 默认最大递归深度。
 	DefaultMaxDepth = 32
-	// 默认分组标签键名
+	// DefaultTagKey 默认分组标签键名。
 	DefaultTagKey = "groups"
 )
 
-// 配置GroupJSON的序列化行为
+// Options 配置序列化行为的选项。
 type Options struct {
-	// 要包含的组名称列表
+	// Groups 要包含的分组名称列表。
 	Groups []string
-	// 定义组筛选逻辑（OR或AND）
+	// GroupMode 分组筛选逻辑（OR或AND）。
 	GroupMode GroupMode
-	// 自定义分组标签的键名（默认为"groups"）
+	// TagKey 自定义分组标签的键名。
 	TagKey string
-	// 如果非空, 输出会被包装在此键下
+	// TopLevelKey 输出包装键，非空时JSON结果被包装在此键下。
 	TopLevelKey string
-	// 最大递归深度, 用于防止循环引用
+	// MaxDepth 最大递归深度，防止循环引用导致栈溢出。
 	MaxDepth int
 }
 
-// 返回默认选项
+// DefaultOptions 返回默认选项配置。
 func DefaultOptions() Options {
 	return Options{
 		GroupMode: ModeOr,
@@ -40,66 +40,66 @@ func DefaultOptions() Options {
 	}
 }
 
-// 分组JSON序列化的主要入口点
+// GroupJSON 分组JSON序列化器。
 type GroupJSON struct {
 	opts Options
 }
 
-// 创建一个新的GroupJSON实例, 使用默认选项
-// 示例: groupjson.New().WithGroups("admin", "internal").WithTopLevelKey("data").Marshal(user)
+// New 创建序列化器实例，使用默认选项。
+// 示例: groupjson.New().WithGroups("admin", "internal").Marshal(user)
 func New() *GroupJSON {
 	return &GroupJSON{
 		opts: DefaultOptions(),
 	}
 }
 
-// 使用默认选项序列化带有组的值
+// Marshal 使用指定分组序列化值。
 func Marshal(v any, groups ...string) ([]byte, error) {
 	return New().WithGroups(groups...).Marshal(v)
 }
 
-// 使用自定义选项序列化带有组的值
+// MarshalWithOptions 使用自定义选项序列化值。
 func MarshalWithOptions(opts Options, v any, groups ...string) ([]byte, error) {
 	return New().WithGroups(groups...).Marshal(v)
 }
 
-// 设置要包含的组名
+// WithGroups 设置要包含的分组名称。
 func (g *GroupJSON) WithGroups(groups ...string) *GroupJSON {
 	g.opts.Groups = groups
 	return g
 }
 
-// 设置组筛选逻辑
+// WithGroupMode 设置分组筛选逻辑模式。
 func (g *GroupJSON) WithGroupMode(mode GroupMode) *GroupJSON {
 	g.opts.GroupMode = mode
 	return g
 }
 
-// 设置自定义标签键
+// WithTagKey 设置自定义标签键名。
 func (g *GroupJSON) WithTagKey(tagKey string) *GroupJSON {
 	g.opts.TagKey = tagKey
 	return g
 }
 
-// 设置顶层包装键
+// WithTopLevelKey 设置结果的顶层包装键。
 func (g *GroupJSON) WithTopLevelKey(key string) *GroupJSON {
 	g.opts.TopLevelKey = key
 	return g
 }
 
-// 设置最大递归深度
+// WithMaxDepth 设置递归深度上限。
 func (g *GroupJSON) WithMaxDepth(depth int) *GroupJSON {
 	g.opts.MaxDepth = depth
 	return g
 }
 
-// 序列化上下文, 包含单次序列化过程的状态
+// encodeContext 序列化上下文，跟踪单次序列化过程状态。
 type encodeContext struct {
-	// 用于跟踪处理过的指针地址, 防止循环引用
+	// visited 已处理的指针地址集合，用于检测循环引用。
 	visited map[uintptr]bool
 }
 
-// 创建新的序列化上下文
+// newEncodeContext 创建新的序列化上下文。
 func newEncodeContext() *encodeContext {
 	return &encodeContext{
 		visited: make(map[uintptr]bool),

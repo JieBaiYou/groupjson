@@ -5,27 +5,31 @@ import (
 	"fmt"
 )
 
-// 预定义错误
+// 库定义的错误类型
 var (
-	// 不能序列化nil值
+	// ErrNilValue 传入nil值时的错误。
 	ErrNilValue = errors.New("groupjson: cannot marshal nil value")
-	// 无效值, 必须是结构体或指向结构体的指针
-	ErrInvalidValue = errors.New("groupjson: invalid value, must be struct or pointer to struct")
-	// 超出最大递归深度
+
+	// ErrInvalidValue 传入无效值类型时的错误。
+	ErrInvalidValue = errors.New("groupjson: value is not valid")
+
+	// ErrMaxDepth 超过最大递归深度时的错误。
 	ErrMaxDepth = errors.New("groupjson: exceeded maximum recursion depth")
-	// 不能序列化此类型
-	ErrInvalidType = errors.New("groupjson: cannot marshal this type")
-	// 代码生成失败
+
+	// ErrInvalidType 传入非结构体类型时的错误。
+	ErrInvalidType = errors.New("groupjson: cannot marshal non-struct value")
+
+	// ErrGeneratorFail 代码生成失败时的错误。
 	ErrGeneratorFail = errors.New("groupjson: code generation failed")
 )
 
-// Error 封装了GroupJSON库的错误
+// Error 带位置信息的错误类型，用于精确定位问题。
 type Error struct {
-	Err  error
-	Path string
+	Err  error  // 原始错误
+	Path string // 错误位置路径
 }
 
-// Error 实现error接口
+// Error 实现error接口，返回格式化的错误消息。
 func (e *Error) Error() string {
 	if e.Path != "" {
 		return fmt.Sprintf("%s at path %s", e.Err.Error(), e.Path)
@@ -33,12 +37,12 @@ func (e *Error) Error() string {
 	return e.Err.Error()
 }
 
-// Unwrap 实现错误链
+// Unwrap 支持errors.Is和errors.As的错误链。
 func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// WrapError 封装一个错误并添加路径信息
+// WrapError 包装错误并添加路径信息，便于定位问题来源。
 func WrapError(err error, path string) *Error {
 	if e, ok := err.(*Error); ok {
 		if e.Path == "" {
