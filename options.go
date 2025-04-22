@@ -34,21 +34,23 @@ func DefaultOptions() Options {
 // 分组JSON序列化的主要入口点
 type GroupJSON struct {
 	opts Options
-	// 用于跟踪处理过的指针地址, 防止循环引用
-	visited map[uintptr]bool
 }
 
 // 创建一个新的GroupJSON实例, 使用默认选项
 // 示例: groupjson.New().WithGroups("admin", "internal").WithTopLevelKey("data").Marshal(user)
 func New() *GroupJSON {
 	return &GroupJSON{
-		opts:    DefaultOptions(),
-		visited: make(map[uintptr]bool),
+		opts: DefaultOptions(),
 	}
 }
 
 // 使用默认选项序列化带有组的值
-func Default(v any, groups ...string) ([]byte, error) {
+func Marshal(v any, groups ...string) ([]byte, error) {
+	return New().WithGroups(groups...).Marshal(v)
+}
+
+// 使用自定义选项序列化带有组的值
+func MarshalWithOptions(opts Options, v any, groups ...string) ([]byte, error) {
 	return New().WithGroups(groups...).Marshal(v)
 }
 
@@ -80,4 +82,17 @@ func (g *GroupJSON) WithTopLevelKey(key string) *GroupJSON {
 func (g *GroupJSON) WithMaxDepth(depth int) *GroupJSON {
 	g.opts.MaxDepth = depth
 	return g
+}
+
+// 序列化上下文，包含单次序列化过程的状态
+type encodeContext struct {
+	// 用于跟踪处理过的指针地址, 防止循环引用
+	visited map[uintptr]bool
+}
+
+// 创建新的序列化上下文
+func newEncodeContext() *encodeContext {
+	return &encodeContext{
+		visited: make(map[uintptr]bool),
+	}
 }

@@ -53,11 +53,11 @@ type ComplexProduct struct {
 
 // 为ComplexProduct类型添加方便的方法, 模拟代码生成的效果
 func (p ComplexProduct) MarshalWithGroups(groups ...string) ([]byte, error) {
-	return groupjson.MarshalWithGroups(p, groups...)
+	return groupjson.Marshal(p, groups...)
 }
 
-func (p ComplexProduct) MarshalWithGroupsOptions(opts groupjson.Options, groups ...string) ([]byte, error) {
-	return groupjson.MarshalWithGroupsOptions(opts, p, groups...)
+func (p ComplexProduct) MarshalWithOptions(opts groupjson.Options, groups ...string) ([]byte, error) {
+	return groupjson.MarshalWithOptions(opts, p, groups...)
 }
 
 // 该函数展示如何使用ComplexProduct的序列化方法

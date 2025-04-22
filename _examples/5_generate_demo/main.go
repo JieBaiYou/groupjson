@@ -20,11 +20,11 @@ type Product struct {
 
 // 为Product类型添加方便的方法, 模拟代码生成的效果
 func (p Product) MarshalWithGroups(groups ...string) ([]byte, error) {
-	return groupjson.MarshalWithGroups(p, groups...)
+	return groupjson.Marshal(p, groups...)
 }
 
-func (p Product) MarshalWithGroupsOptions(opts groupjson.Options, groups ...string) ([]byte, error) {
-	return groupjson.MarshalWithGroupsOptions(opts, p, groups...)
+func (p Product) MarshalWithOptions(opts groupjson.Options, groups ...string) ([]byte, error) {
+	return groupjson.MarshalWithOptions(opts, p, groups...)
 }
 
 func demoSimpleProduct() {
@@ -64,7 +64,7 @@ func demoSimpleProduct() {
 		TopLevelKey: "data",
 		GroupMode:   groupjson.ModeOr, // 默认是OR模式, 这里显式指定
 	}
-	inventoryJSON, err := product.MarshalWithGroupsOptions(opts, "inventory")
+	inventoryJSON, err := product.MarshalWithOptions(opts, "inventory")
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
 		return

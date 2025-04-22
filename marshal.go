@@ -39,8 +39,8 @@ func (g *GroupJSON) structToMap(v any) (map[string]any, error) {
 		return nil, ErrNilValue
 	}
 
-	// 清除之前处理过的路径记录，避免循环引用问题
-	g.visited = make(map[uintptr]bool)
+	// 创建新的上下文，用于跟踪处理过的指针
+	ctx := newEncodeContext()
 
 	val := reflect.ValueOf(v)
 	// 解引用指针，获取实际值
@@ -53,12 +53,12 @@ func (g *GroupJSON) structToMap(v any) (map[string]any, error) {
 		return nil, ErrInvalidValue
 	}
 
-	return g.marshalStruct(val, 0)
+	return g.marshalStruct(ctx, val, 0)
 }
 
 // 根据值的类型进行适当的序列化，是序列化过程的核心路由函数
 // 根据不同的数据类型分发到对应的处理函数
-func (g *GroupJSON) marshalValue(val reflect.Value, depth int) (any, error) {
+func (g *GroupJSON) marshalValue(ctx *encodeContext, val reflect.Value, depth int) (any, error) {
 	// 处理nil指针
 	if val.Kind() == reflect.Ptr && val.IsNil() {
 		return nil, nil
@@ -66,7 +66,7 @@ func (g *GroupJSON) marshalValue(val reflect.Value, depth int) (any, error) {
 
 	// 解引用指针获取实际值
 	if val.Kind() == reflect.Ptr {
-		return g.marshalValue(val.Elem(), depth)
+		return g.marshalValue(ctx, val.Elem(), depth)
 	}
 
 	// 检查递归深度，防止无限递归
@@ -94,13 +94,13 @@ func (g *GroupJSON) marshalValue(val reflect.Value, depth int) (any, error) {
 		if val.Type().String() == "time.Time" {
 			return val.Interface(), nil
 		}
-		return g.marshalStruct(val, depth)
+		return g.marshalStruct(ctx, val, depth)
 
 	case reflect.Map:
-		return g.marshalMap(val, depth)
+		return g.marshalMap(ctx, val, depth)
 
 	case reflect.Slice, reflect.Array:
-		return g.marshalSlice(val, depth)
+		return g.marshalSlice(ctx, val, depth)
 
 	default:
 		// 基本类型（数字、字符串、布尔等）直接返回
@@ -110,21 +110,21 @@ func (g *GroupJSON) marshalValue(val reflect.Value, depth int) (any, error) {
 
 // 处理结构体类型的序列化，支持嵌套结构和匿名字段
 // 会根据组标签过滤字段，并处理JSON标签选项
-func (g *GroupJSON) marshalStruct(val reflect.Value, depth int) (map[string]any, error) {
+func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value, depth int) (map[string]any, error) {
 	typ := val.Type()
 	result := make(map[string]any)
 
 	// 检测循环引用 - 只对可寻址的值进行检查
 	ptrAddr := g.getPointerAddress(val)
 	if ptrAddr != 0 {
-		if g.visited[ptrAddr] {
+		if ctx.visited[ptrAddr] {
 			// 发现循环引用，返回空对象避免无限递归
 			return result, nil
 		}
 		// 标记为已访问
-		g.visited[ptrAddr] = true
+		ctx.visited[ptrAddr] = true
 		// 函数返回时移除标记，允许在其他上下文中使用相同的值
-		defer delete(g.visited, ptrAddr)
+		defer delete(ctx.visited, ptrAddr)
 	}
 
 	// 检查深度限制，防止嵌套过深导致栈溢出
@@ -157,7 +157,7 @@ func (g *GroupJSON) marshalStruct(val reflect.Value, depth int) (map[string]any,
 			// 只处理结构体类型的匿名字段
 			if fieldVal.Kind() == reflect.Struct {
 				// 匿名字段应视为当前层级的一部分，不增加深度计数
-				nestedResult, err := g.marshalStruct(fieldVal, depth)
+				nestedResult, err := g.marshalStruct(ctx, fieldVal, depth)
 				if err != nil {
 					continue // 按标准库行为，忽略错误的匿名字段
 				}
@@ -209,7 +209,7 @@ func (g *GroupJSON) marshalStruct(val reflect.Value, depth int) (map[string]any,
 		}
 
 		// 处理字段值 - 对于普通字段，增加递归深度
-		value, err := g.marshalValue(field, depth+1)
+		value, err := g.marshalValue(ctx, field, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +237,7 @@ func (g *GroupJSON) marshalStruct(val reflect.Value, depth int) (map[string]any,
 }
 
 // 处理map类型的序列化，支持任意值类型但键必须是字符串
-func (g *GroupJSON) marshalMap(val reflect.Value, depth int) (any, error) {
+func (g *GroupJSON) marshalMap(ctx *encodeContext, val reflect.Value, depth int) (any, error) {
 	if val.IsNil() {
 		return nil, nil
 	}
@@ -250,14 +250,14 @@ func (g *GroupJSON) marshalMap(val reflect.Value, depth int) (any, error) {
 	// 检测循环引用 - 对于map类型
 	ptrAddr := g.getPointerAddress(val)
 	if ptrAddr != 0 {
-		if g.visited[ptrAddr] {
+		if ctx.visited[ptrAddr] {
 			// 发现循环引用，返回空对象避免无限递归
 			return map[string]any{}, nil
 		}
 		// 标记为已访问
-		g.visited[ptrAddr] = true
+		ctx.visited[ptrAddr] = true
 		// 函数返回时移除标记
-		defer delete(g.visited, ptrAddr)
+		defer delete(ctx.visited, ptrAddr)
 	}
 
 	result := make(map[string]any)
@@ -271,7 +271,7 @@ func (g *GroupJSON) marshalMap(val reflect.Value, depth int) (any, error) {
 
 		keyStr := k.String()
 		// 递归处理map的值部分
-		itemVal, err := g.marshalValue(iter.Value(), depth+1)
+		itemVal, err := g.marshalValue(ctx, iter.Value(), depth+1)
 		if err != nil {
 			// 忽略达到递归深度的元素，继续处理其他元素
 			if errors.Is(err, ErrMaxDepth) {
@@ -287,7 +287,7 @@ func (g *GroupJSON) marshalMap(val reflect.Value, depth int) (any, error) {
 }
 
 // 处理切片和数组类型的序列化，支持任意元素类型
-func (g *GroupJSON) marshalSlice(val reflect.Value, depth int) (any, error) {
+func (g *GroupJSON) marshalSlice(ctx *encodeContext, val reflect.Value, depth int) (any, error) {
 	if val.IsNil() {
 		return nil, nil
 	}
@@ -300,21 +300,21 @@ func (g *GroupJSON) marshalSlice(val reflect.Value, depth int) (any, error) {
 	// 检测循环引用 - 对于可寻址的slice/array
 	ptrAddr := g.getPointerAddress(val)
 	if ptrAddr != 0 {
-		if g.visited[ptrAddr] {
+		if ctx.visited[ptrAddr] {
 			// 发现循环引用，返回空数组避免无限递归
 			return []any{}, nil
 		}
 		// 标记为已访问
-		g.visited[ptrAddr] = true
+		ctx.visited[ptrAddr] = true
 		// 函数返回时移除标记
-		defer delete(g.visited, ptrAddr)
+		defer delete(ctx.visited, ptrAddr)
 	}
 
 	// 预分配适当容量的切片以提高性能
 	result := make([]any, 0, val.Len())
 	for i := 0; i < val.Len(); i++ {
 		// 递归处理每个元素
-		itemVal, err := g.marshalValue(val.Index(i), depth+1)
+		itemVal, err := g.marshalValue(ctx, val.Index(i), depth+1)
 		if err != nil {
 			// 忽略达到递归深度的元素，继续处理其他元素
 			if errors.Is(err, ErrMaxDepth) {
