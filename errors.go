@@ -7,11 +7,16 @@ import (
 
 // 预定义错误
 var (
-	ErrNilValue      = errors.New("groupjson: cannot marshal nil value")                           // 不能序列化nil值
-	ErrInvalidValue  = errors.New("groupjson: invalid value, must be struct or pointer to struct") // 无效值, 必须是结构体或指向结构体的指针
-	ErrMaxDepth      = errors.New("groupjson: exceeded maximum recursion depth")                   // 超出最大递归深度
-	ErrInvalidType   = errors.New("groupjson: cannot marshal this type")                           // 不能序列化此类型
-	ErrGeneratorFail = errors.New("groupjson: code generation failed")                             // 代码生成失败
+	// 不能序列化nil值
+	ErrNilValue = errors.New("groupjson: cannot marshal nil value")
+	// 无效值, 必须是结构体或指向结构体的指针
+	ErrInvalidValue = errors.New("groupjson: invalid value, must be struct or pointer to struct")
+	// 超出最大递归深度
+	ErrMaxDepth = errors.New("groupjson: exceeded maximum recursion depth")
+	// 不能序列化此类型
+	ErrInvalidType = errors.New("groupjson: cannot marshal this type")
+	// 代码生成失败
+	ErrGeneratorFail = errors.New("groupjson: code generation failed")
 )
 
 // Error 封装了GroupJSON库的错误

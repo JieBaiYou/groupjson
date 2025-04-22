@@ -10,9 +10,19 @@ import (
 // 将值按照组过滤序列化为JSON，这是库的主要入口点
 // 先将值转换为map，再使用标准JSON库进行最终序列化
 // 如果指定了顶层键，结果会被包装在该键下
+// 只支持结构体类型或指向结构体的指针
 func (g *GroupJSON) Marshal(v any) ([]byte, error) {
 	if v == nil {
 		return nil, ErrNilValue
+	}
+
+	// 检查是否为结构体或指向结构体的指针
+	val := reflect.ValueOf(v)
+	for val.Kind() == reflect.Ptr && !val.IsNil() {
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return nil, ErrInvalidValue
 	}
 
 	// 将值转换为map

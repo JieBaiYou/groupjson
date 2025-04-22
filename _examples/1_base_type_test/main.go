@@ -37,7 +37,7 @@ func main() {
 	// 输出: {"data":{"email":"zhangsan@example.com","id":1,"name":"张三","password":"secret123"}}
 
 	// 使用Marshal解析
-	internalJSON, _ := groupjson.Default(user, "internal")
+	internalJSON, _ := groupjson.Marshal(user, "internal")
 	fmt.Println(string(internalJSON))
 	// 输出: {"password":"secret123"}
 }

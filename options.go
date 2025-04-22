@@ -4,22 +4,31 @@ package groupjson
 type GroupMode int
 
 const (
-	ModeOr  GroupMode = iota // 表示字段只要属于任一指定分组即包含在结果中（默认）
-	ModeAnd                  // 表示字段必须同时属于所有指定组才包含在结果中
+	// 表示字段只要属于任一指定分组即包含在结果中（默认）
+	ModeOr GroupMode = iota
+	// 表示字段必须同时属于所有指定组才包含在结果中
+	ModeAnd
 )
 
 const (
-	DefaultMaxDepth = 32       // 默认最大递归深度
-	DefaultTagKey   = "groups" // 默认分组标签键名
+	// 默认最大递归深度
+	DefaultMaxDepth = 32
+	// 默认分组标签键名
+	DefaultTagKey = "groups"
 )
 
 // 配置GroupJSON的序列化行为
 type Options struct {
-	Groups      []string  // 要包含的组名称列表
-	GroupMode   GroupMode // 定义组筛选逻辑（OR或AND）
-	TagKey      string    // 自定义分组标签的键名（默认为"groups"）
-	TopLevelKey string    // 如果非空, 输出会被包装在此键下
-	MaxDepth    int       // 最大递归深度, 用于防止循环引用
+	// 要包含的组名称列表
+	Groups []string
+	// 定义组筛选逻辑（OR或AND）
+	GroupMode GroupMode
+	// 自定义分组标签的键名（默认为"groups"）
+	TagKey string
+	// 如果非空, 输出会被包装在此键下
+	TopLevelKey string
+	// 最大递归深度, 用于防止循环引用
+	MaxDepth int
 }
 
 // 返回默认选项
