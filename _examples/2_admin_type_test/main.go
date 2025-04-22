@@ -7,14 +7,14 @@ import (
 	"github.com/JieBaiYou/groupjson"
 )
 
-// 基础元数据结构，用于匿名嵌入
+// 基础元数据结构, 用于匿名嵌入
 type Metadata struct {
 	CreatedAt  time.Time `json:"created_at" groups:"public,admin"`
 	UpdatedAt  time.Time `json:"updated_at" groups:"admin"`
 	VisitCount int       `json:"visit_count" groups:"stats,admin"`
 }
 
-// 用户地址信息，展示嵌套结构
+// 用户地址信息, 展示嵌套结构
 type Address struct {
 	Province   string `json:"province" groups:"admin,shipping"`
 	City       string `json:"city" groups:"admin,shipping"`
@@ -34,7 +34,7 @@ type User struct {
 	VIP      bool    `json:"vip" groups:"admin,marketing"`
 }
 
-// 文章内容，展示多种数据类型
+// 文章内容, 展示多种数据类型
 type Article struct {
 	ID         int       `json:"id" groups:"public,admin"`
 	Title      string    `json:"title" groups:"public,admin"`
@@ -107,7 +107,7 @@ func main() {
 		Comments: []Comment{
 			{
 				ID:        201,
-				Content:   "非常实用的库，已经用到项目中了！",
+				Content:   "非常实用的库, 已经用到项目中了！",
 				CreatedAt: now.Add(-12 * time.Hour),
 				UserID:    2,
 				Approved:  true,
@@ -121,7 +121,7 @@ func main() {
 			},
 			{
 				ID:        203,
-				Content:   "垃圾文章，毫无价值",
+				Content:   "垃圾文章, 毫无价值",
 				CreatedAt: now.Add(-2 * time.Hour),
 				UserID:    4,
 				Approved:  false, // 未审核通过的评论

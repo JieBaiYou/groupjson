@@ -93,7 +93,7 @@ func (g *GroupJSON) WithMaxDepth(depth int) *GroupJSON {
 	return g
 }
 
-// 序列化上下文，包含单次序列化过程的状态
+// 序列化上下文, 包含单次序列化过程的状态
 type encodeContext struct {
 	// 用于跟踪处理过的指针地址, 防止循环引用
 	visited map[uintptr]bool
