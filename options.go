@@ -88,6 +88,10 @@ func (g *GroupJSON) WithTopLevelKey(key string) *GroupJSON {
 
 // WithMaxDepth 设置递归深度上限。
 func (g *GroupJSON) WithMaxDepth(depth int) *GroupJSON {
+	// 深度值至少为1
+	if depth < 1 {
+		depth = 1
+	}
 	g.opts.MaxDepth = depth
 	return g
 }
@@ -156,4 +160,9 @@ func (ctx *encodeContext) DecDepth() {
 	if ctx.depth < 0 {
 		ctx.depth = 0 // 防止异常情况
 	}
+}
+
+// IsMaxDepthReached 检查是否达到最大深度
+func (ctx *encodeContext) IsMaxDepthReached() bool {
+	return ctx.depth >= ctx.maxDepth
 }

@@ -39,9 +39,13 @@ func main() {
 	fmt.Println("==== 测试递归深度限制 ====")
 
 	// 完整输出, 无深度限制
-	fullJSON, _ := groupjson.New().
+	fullJSON, err := groupjson.New().
 		WithGroups("admin").
 		Marshal(data)
+	if err != nil {
+		fmt.Println("错误:", err)
+		return
+	}
 	fmt.Println("完整输出(无深度限制):")
 	fmt.Println(string(fullJSON))
 

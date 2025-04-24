@@ -2,6 +2,7 @@ package groupjson
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -78,11 +79,25 @@ func (g *GroupJSON) marshalValue(ctx *encodeContext, val reflect.Value) (any, er
 		return g.marshalValue(ctx, val.Elem())
 	}
 
-	// 递增深度计数器，超过最大深度时会自动返回错误
+	// 递增深度计数器
 	if err := ctx.IncDepth(); err != nil {
-		return nil, err
+		// 循环引用错误仍然返回
+		if errors.Is(err, ErrCircularReference) {
+			return nil, err
+		}
+		// 深度限制错误被转换为nil返回，而不是抛出错误
+		return nil, nil
 	}
 	defer ctx.DecDepth()
+
+	// 对于结构体和集合类型，如果已经达到最大深度，返回null
+	if ctx.IsMaxDepthReached() {
+		switch val.Kind() {
+		case reflect.Struct, reflect.Map, reflect.Slice, reflect.Array:
+			// 达到最大深度限制，返回nil而不是错误
+			return nil, nil
+		}
+	}
 
 	// 根据类型分发处理
 	switch val.Kind() {
@@ -154,8 +169,24 @@ func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value) (map[st
 				// 将匿名字段名添加到路径
 				ctx.PushPath(fieldType.Name)
 
+				// 对于匿名字段，我们不应检测其自身的循环引用，因为它是父结构体的一部分
+				// 保存当前的访问记录，并在处理匿名字段期间使用一个新的拷贝
+				visitedCopy := make(map[uintptr]bool)
+				for k, v := range ctx.visited {
+					visitedCopy[k] = v
+				}
+
+				// 清除匿名字段自身的标记，防止误识别为循环引用
+				anonymousAddr := g.getPointerAddress(fieldVal)
+				if anonymousAddr != 0 {
+					delete(ctx.visited, anonymousAddr)
+				}
+
 				// 匿名字段视为当前层级
 				nestedResult, err := g.marshalStruct(ctx, fieldVal)
+
+				// 恢复原始的访问记录
+				ctx.visited = visitedCopy
 
 				// 恢复路径
 				ctx.PopPath()

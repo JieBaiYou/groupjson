@@ -55,19 +55,27 @@ func main() {
 	// 测试场景1: 超出最大递归深度
 	fmt.Println("\n1. 测试超出最大递归深度:")
 	root := createDeepNestedStructure(10) // 创建10层嵌套
+	fmt.Printf("原始结构深度: %d\n", 10)
 
 	// 设置一个较小的最大深度
+	maxDepth := 3
 	g := groupjson.New().
 		WithGroups("base").
-		WithMaxDepth(3)
+		WithTagKey("groupjson"). // 设置正确的标签名称
+		WithMaxDepth(maxDepth)
 
-	_, err := g.Marshal(root)
+	result1, err := g.Marshal(root)
 	if err != nil {
-		fmt.Printf("预期错误: %v\n", err)
-		fmt.Println("检查错误信息是否包含深度信息: ", contains(err.Error(), "depth"))
-		fmt.Println("检查错误信息是否包含路径信息: ", contains(err.Error(), "path") || contains(err.Error(), "NextLevel"))
+		fmt.Printf("意外错误: %v\n", err)
 	} else {
-		fmt.Println("错误: 预期应该返回深度超限错误，但没有返回错误")
+		fmt.Println("成功截断深度超限结构")
+		resultStr := string(result1)
+		fmt.Printf("结果: %s\n", resultStr)
+
+		// 检查嵌套深度 - 注意第一层不包含"next_level"
+		levels := countNestedLevels(resultStr)
+		fmt.Printf("实际嵌套层数: %d (最大深度设置为%d)\n", levels, maxDepth)
+		fmt.Printf("深度限制是否生效: %v\n", levels < 10)
 	}
 
 	// 测试场景2: 循环引用检测
@@ -78,7 +86,8 @@ func main() {
 	b.A = a
 
 	g = groupjson.New().
-		WithGroups("base")
+		WithGroups("base").
+		WithTagKey("groupjson")
 
 	result, err := g.Marshal(a)
 	if err != nil {
@@ -99,7 +108,8 @@ func main() {
 	}
 
 	g = groupjson.New().
-		WithGroups("base")
+		WithGroups("base").
+		WithTagKey("groupjson")
 
 	_, err = g.Marshal(obj)
 	if err != nil {
@@ -112,25 +122,30 @@ func main() {
 		fmt.Println("错误: 预期应该返回类型错误，但没有返回错误")
 	}
 
-	// 测试场景4: 使用新的Marshal函数测试深度超限
+	// 测试场景4: 使用不同API测试深度超限
 	fmt.Println("\n4. 使用不同API测试深度超限:")
 	root = createDeepNestedStructure(5) // 创建5层嵌套
-
-	// 使用较小的最大深度
-	// _, err = groupjson.MarshalWithOptions(root, 2) // 原错误代码
+	fmt.Printf("原始结构深度: %d\n", 5)
 
 	// 使用已知可用的API
+	maxDepth = 2
 	g = groupjson.New().
 		WithGroups("base").
-		WithMaxDepth(2)
+		WithTagKey("groupjson"). // 设置正确的标签名称
+		WithMaxDepth(maxDepth)
 
-	_, err = g.Marshal(root)
+	result4, err := g.Marshal(root)
 	if err != nil {
-		fmt.Printf("预期错误: %v\n", err)
-		fmt.Println("检查错误信息是否包含深度信息: ", contains(err.Error(), "depth"))
-		fmt.Println("检查错误信息是否包含路径信息: ", contains(err.Error(), "path") || contains(err.Error(), "Level"))
+		fmt.Printf("意外错误: %v\n", err)
 	} else {
-		fmt.Println("错误: 预期应该返回深度超限错误，但没有返回错误")
+		fmt.Println("成功截断深度超限结构")
+		resultStr := string(result4)
+		fmt.Printf("结果: %s\n", resultStr)
+
+		// 检查嵌套深度
+		levels := countNestedLevels(resultStr)
+		fmt.Printf("实际嵌套层数: %d (最大深度设置为%d)\n", levels, maxDepth)
+		fmt.Printf("深度限制是否生效: %v\n", levels < 5)
 	}
 }
 
@@ -140,4 +155,10 @@ func contains(s, substr string) bool {
 		strings.ToLower(s),
 		strings.ToLower(substr),
 	)
+}
+
+// 辅助函数：计算嵌套层数
+func countNestedLevels(s string) int {
+	// 计算嵌套的"next_level"出现次数 + 1 (根层级)
+	return strings.Count(s, "next_level") + 1
 }
