@@ -3,6 +3,7 @@ package groupjson
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // 库定义的错误类型
@@ -21,6 +22,15 @@ var (
 
 	// ErrGeneratorFail 代码生成失败时的错误。
 	ErrGeneratorFail = errors.New("groupjson: code generation failed")
+
+	// ErrCircularReference 检测到循环引用时的错误。
+	ErrCircularReference = errors.New("groupjson: circular reference detected")
+
+	// ErrUnsupportedType 不支持的类型错误。
+	ErrUnsupportedType = errors.New("groupjson: unsupported type for serialization")
+
+	// ErrNonStringMapKey Map键不是字符串类型的错误。
+	ErrNonStringMapKey = errors.New("groupjson: map key is not string type")
 )
 
 // Error 带位置信息的错误类型，用于精确定位问题。
@@ -45,10 +55,18 @@ func (e *Error) Unwrap() error {
 // WrapError 包装错误并添加路径信息，便于定位问题来源。
 func WrapError(err error, path string) *Error {
 	if e, ok := err.(*Error); ok {
+		// 已经是包装过的错误
 		if e.Path == "" {
+			// 原错误没有路径，直接使用当前路径
 			e.Path = path
 		} else if path != "" {
-			e.Path = path + "." + e.Path
+			// 防止路径重复
+			if e.Path == path || strings.HasSuffix(e.Path, "."+path) || strings.HasPrefix(e.Path, path+".") {
+				// 路径已经包含在内，不需要添加
+			} else {
+				// 前置当前路径
+				e.Path = path + "." + e.Path
+			}
 		}
 		return e
 	}

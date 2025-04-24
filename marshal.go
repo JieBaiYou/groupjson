@@ -2,7 +2,7 @@ package groupjson
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -21,7 +21,7 @@ func (g *GroupJSON) Marshal(v any) ([]byte, error) {
 		val = val.Elem()
 	}
 	if val.Kind() != reflect.Struct {
-		return nil, ErrInvalidValue
+		return nil, ErrInvalidType
 	}
 
 	// 将值转换为map
@@ -48,8 +48,8 @@ func (g *GroupJSON) structToMap(v any) (map[string]any, error) {
 		return nil, ErrNilValue
 	}
 
-	// 创建上下文用于循环引用检测
-	ctx := newEncodeContext()
+	// 创建上下文用于循环引用检测和路径跟踪
+	ctx := newEncodeContext(g.opts.MaxDepth)
 
 	val := reflect.ValueOf(v)
 	// 解引用指针获取实际值
@@ -59,15 +59,15 @@ func (g *GroupJSON) structToMap(v any) (map[string]any, error) {
 
 	// 只处理结构体类型
 	if val.Kind() != reflect.Struct {
-		return nil, ErrInvalidValue
+		return nil, ErrInvalidType
 	}
 
-	return g.marshalStruct(ctx, val, 0)
+	return g.marshalStruct(ctx, val)
 }
 
 // marshalValue 根据值类型选择合适的序列化方法。
 // 处理各种数据结构并防止递归过深。
-func (g *GroupJSON) marshalValue(ctx *encodeContext, val reflect.Value, depth int) (any, error) {
+func (g *GroupJSON) marshalValue(ctx *encodeContext, val reflect.Value) (any, error) {
 	// 处理nil指针
 	if val.Kind() == reflect.Ptr && val.IsNil() {
 		return nil, nil
@@ -75,26 +75,14 @@ func (g *GroupJSON) marshalValue(ctx *encodeContext, val reflect.Value, depth in
 
 	// 解引用指针获取实际值
 	if val.Kind() == reflect.Ptr {
-		return g.marshalValue(ctx, val.Elem(), depth)
+		return g.marshalValue(ctx, val.Elem())
 	}
 
-	// 防止无限递归
-	if depth > g.opts.MaxDepth {
-		// 对于超过最大深度的复杂类型，返回空值而不是nil
-		// 这样JSON输出会更一致（如 {} 而不是 null）
-		switch val.Kind() {
-		case reflect.Struct:
-			// 特殊处理time.Time
-			if val.Type().String() == "time.Time" {
-				return val.Interface(), nil
-			}
-			return map[string]any{}, nil
-		case reflect.Map:
-			return map[string]any{}, nil
-		case reflect.Slice, reflect.Array:
-			return []any{}, nil
-		}
+	// 递增深度计数器，超过最大深度时会自动返回错误
+	if err := ctx.IncDepth(); err != nil {
+		return nil, err
 	}
+	defer ctx.DecDepth()
 
 	// 根据类型分发处理
 	switch val.Kind() {
@@ -103,13 +91,17 @@ func (g *GroupJSON) marshalValue(ctx *encodeContext, val reflect.Value, depth in
 		if val.Type().String() == "time.Time" {
 			return val.Interface(), nil
 		}
-		return g.marshalStruct(ctx, val, depth)
+		return g.marshalStruct(ctx, val)
 
 	case reflect.Map:
-		return g.marshalMap(ctx, val, depth)
+		return g.marshalMap(ctx, val)
 
 	case reflect.Slice, reflect.Array:
-		return g.marshalSlice(ctx, val, depth)
+		return g.marshalSlice(ctx, val)
+
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		// 不支持序列化的类型
+		return nil, WrapError(ErrUnsupportedType, fmt.Sprintf("%s (%s)", ctx.Path(), val.Type().String()))
 
 	default:
 		// 基本类型直接返回值
@@ -119,7 +111,7 @@ func (g *GroupJSON) marshalValue(ctx *encodeContext, val reflect.Value, depth in
 
 // marshalStruct 序列化结构体类型，支持嵌套和匿名字段。
 // 根据标签过滤字段并处理JSON特性（如omitempty）。
-func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value, depth int) (map[string]any, error) {
+func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value) (map[string]any, error) {
 	typ := val.Type()
 	result := make(map[string]any)
 
@@ -127,18 +119,13 @@ func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value, depth i
 	ptrAddr := g.getPointerAddress(val)
 	if ptrAddr != 0 {
 		if ctx.visited[ptrAddr] {
-			// 发现循环引用，返回空对象
-			return result, nil
+			// 发现循环引用，抛出错误
+			return nil, WrapError(ErrCircularReference, ctx.Path())
 		}
 		// 标记为已访问
 		ctx.visited[ptrAddr] = true
 		// 函数返回时移除标记
 		defer delete(ctx.visited, ptrAddr)
-	}
-
-	// 检查深度限制
-	if depth > g.opts.MaxDepth {
-		return result, nil
 	}
 
 	// 存储匿名字段结果，按encoding/json规则应用
@@ -164,10 +151,18 @@ func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value, depth i
 
 			// 处理结构体类型的匿名字段
 			if fieldVal.Kind() == reflect.Struct {
-				// 匿名字段视为当前层级，不增加深度
-				nestedResult, err := g.marshalStruct(ctx, fieldVal, depth)
+				// 将匿名字段名添加到路径
+				ctx.PushPath(fieldType.Name)
+
+				// 匿名字段视为当前层级
+				nestedResult, err := g.marshalStruct(ctx, fieldVal)
+
+				// 恢复路径
+				ctx.PopPath()
+
 				if err != nil {
-					continue // 忽略错误的匿名字段
+					// 不再静默忽略匿名字段错误
+					return nil, err
 				}
 
 				// 暂存匿名字段结果
@@ -215,10 +210,17 @@ func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value, depth i
 			continue // 排除不符合条件的字段
 		}
 
-		// 处理字段值，增加递归深度
-		value, err := g.marshalValue(ctx, field, depth+1)
+		// 将字段名添加到当前路径
+		ctx.PushPath(jsonName)
+
+		// 处理字段值
+		value, err := g.marshalValue(ctx, field)
+
+		// 恢复路径
+		ctx.PopPath()
+
 		if err != nil {
-			return nil, err
+			return nil, WrapError(err, jsonName) // 确保错误包含路径信息
 		}
 
 		// 处理omitempty和omitzero选项
@@ -243,22 +245,17 @@ func (g *GroupJSON) marshalStruct(ctx *encodeContext, val reflect.Value, depth i
 }
 
 // marshalMap 序列化map类型，键类型必须是字符串。
-func (g *GroupJSON) marshalMap(ctx *encodeContext, val reflect.Value, depth int) (any, error) {
+func (g *GroupJSON) marshalMap(ctx *encodeContext, val reflect.Value) (any, error) {
 	if val.IsNil() {
 		return nil, nil
-	}
-
-	// 检查深度限制
-	if depth > g.opts.MaxDepth {
-		return map[string]any{}, nil
 	}
 
 	// 检测循环引用
 	ptrAddr := g.getPointerAddress(val)
 	if ptrAddr != 0 {
 		if ctx.visited[ptrAddr] {
-			// 发现循环引用，返回空对象
-			return map[string]any{}, nil
+			// 发现循环引用，抛出错误
+			return nil, WrapError(ErrCircularReference, ctx.Path())
 		}
 		// 标记为已访问
 		ctx.visited[ptrAddr] = true
@@ -272,18 +269,22 @@ func (g *GroupJSON) marshalMap(ctx *encodeContext, val reflect.Value, depth int)
 		k := iter.Key()
 		if k.Kind() != reflect.String {
 			// 只支持字符串键
-			continue
+			return nil, WrapError(ErrNonStringMapKey, ctx.Path())
 		}
 
 		keyStr := k.String()
+
+		// 将map键添加到路径
+		ctx.PushPath(fmt.Sprintf("[%s]", keyStr))
+
 		// 递归处理值
-		itemVal, err := g.marshalValue(ctx, iter.Value(), depth+1)
+		itemVal, err := g.marshalValue(ctx, iter.Value())
+
+		// 恢复路径
+		ctx.PopPath()
+
 		if err != nil {
-			// 忽略达到递归深度的元素
-			if errors.Is(err, ErrMaxDepth) {
-				continue
-			}
-			return nil, err
+			return nil, WrapError(err, fmt.Sprintf("[%s]", keyStr))
 		}
 
 		result[keyStr] = itemVal
@@ -293,22 +294,17 @@ func (g *GroupJSON) marshalMap(ctx *encodeContext, val reflect.Value, depth int)
 }
 
 // marshalSlice 序列化切片或数组类型。
-func (g *GroupJSON) marshalSlice(ctx *encodeContext, val reflect.Value, depth int) (any, error) {
+func (g *GroupJSON) marshalSlice(ctx *encodeContext, val reflect.Value) (any, error) {
 	if val.IsNil() {
 		return nil, nil
-	}
-
-	// 检查深度限制
-	if depth > g.opts.MaxDepth {
-		return []any{}, nil
 	}
 
 	// 检测循环引用
 	ptrAddr := g.getPointerAddress(val)
 	if ptrAddr != 0 {
 		if ctx.visited[ptrAddr] {
-			// 发现循环引用，返回空数组
-			return []any{}, nil
+			// 发现循环引用，抛出错误
+			return nil, WrapError(ErrCircularReference, ctx.Path())
 		}
 		// 标记为已访问
 		ctx.visited[ptrAddr] = true
@@ -319,15 +315,19 @@ func (g *GroupJSON) marshalSlice(ctx *encodeContext, val reflect.Value, depth in
 	// 预分配适当容量
 	result := make([]any, 0, val.Len())
 	for i := 0; i < val.Len(); i++ {
+		// 将数组索引添加到路径
+		ctx.PushPath(fmt.Sprintf("[%d]", i))
+
 		// 递归处理每个元素
-		itemVal, err := g.marshalValue(ctx, val.Index(i), depth+1)
+		itemVal, err := g.marshalValue(ctx, val.Index(i))
+
+		// 恢复路径
+		ctx.PopPath()
+
 		if err != nil {
-			// 忽略达到递归深度的元素
-			if errors.Is(err, ErrMaxDepth) {
-				continue
-			}
-			return nil, err
+			return nil, WrapError(err, fmt.Sprintf("[%d]", i))
 		}
+
 		result = append(result, itemVal)
 	}
 

@@ -12,6 +12,7 @@ type User struct {
 	Name     string `json:"name" groups:"public,admin"`
 	Email    string `json:"email" groups:"admin"`
 	Password string `json:"password" groups:"internal"`
+	HTML     string `json:"html" groups:"admin,internal"`
 }
 
 func main() {
@@ -20,6 +21,7 @@ func main() {
 		Name:     "张三",
 		Email:    "zhangsan@example.com",
 		Password: "secret123",
+		HTML:     "<div>Hello, World!</div>",
 	}
 
 	// 使用流畅 API
@@ -38,7 +40,7 @@ func main() {
 	// 输出: {"data":{"email":"zhangsan@example.com","id":1,"name":"张三","password":"secret123"}}
 
 	// 使用Marshal解析
-	internalJSON, _ := groupjson.Marshal(user, "internal")
+	internalJSON, _ := groupjson.Default(user, "internal")
 	fmt.Printf("internalJSON: %s\n\n", string(internalJSON))
 	// 输出: {"password":"secret123"}
 
@@ -59,7 +61,7 @@ func main() {
 	// 输出: {"id":1,"name":"张三","email":"zhangsan@example.com","password":"\u003cdiv class=\"content\" data-info='{\"key\": \"value\", \"text\": \"He said, \\\"Hello \u003cworld\u003e \u0026 welcome!\\\"\"}'\u003e\n  \u003c!-- 注释：这是一个 \u003c测试\u003e 区域 --\u003e\n  \u003cp title=\"提示 \u0026 描述\"\u003e这是一段包含 \u0026lt;strong\u0026gt;HTML\u0026lt;/strong\u0026gt; 的文本。\u003c/p\u003e\n  \u003cscript\u003ealert(\"你好，世界！ \u0026 \\\" \u003c \u003e\");\u003c/script\u003e\n\u003c/div\u003e"}
 
 	// 使用Marshal解析
-	internalJSON, _ = groupjson.Marshal(user, "internal")
+	internalJSON, _ = groupjson.Default(user, "internal")
 	fmt.Printf("internalJSON: %s\n\n", string(internalJSON))
 	// 输出: {"password":"\u003cdiv class=\"content\" data-info='{\"key\": \"value\", \"text\": \"He said, \\\"Hello \u003cworld\u003e \u0026 welcome!\\\"\"}'\u003e\n  \u003c!-- 注释：这是一个 \u003c测试\u003e 区域 --\u003e\n  \u003cp title=\"提示 \u0026 描述\"\u003e这是一段包含 \u0026lt;strong\u0026gt;HTML\u0026lt;/strong\u0026gt; 的文本。\u003c/p\u003e\n  \u003cscript\u003ealert(\"你好，世界！ \u0026 \\\" \u003c \u003e\");\u003c/script\u003e\n\u003c/div\u003e"}
 }

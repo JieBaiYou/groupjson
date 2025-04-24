@@ -1,5 +1,9 @@
 package groupjson
 
+import (
+	"strings"
+)
+
 // GroupMode 定义分组筛选的逻辑模式。
 type GroupMode int
 
@@ -53,13 +57,8 @@ func New() *GroupJSON {
 	}
 }
 
-// Marshal 使用指定分组序列化值。
-func Marshal(v any, groups ...string) ([]byte, error) {
-	return New().WithGroups(groups...).Marshal(v)
-}
-
-// MarshalWithOptions 使用自定义选项序列化值。
-func MarshalWithOptions(opts Options, v any, groups ...string) ([]byte, error) {
+// Default 使用指定分组序列化值。
+func Default(v any, groups ...string) ([]byte, error) {
 	return New().WithGroups(groups...).Marshal(v)
 }
 
@@ -97,11 +96,64 @@ func (g *GroupJSON) WithMaxDepth(depth int) *GroupJSON {
 type encodeContext struct {
 	// visited 已处理的指针地址集合，用于检测循环引用。
 	visited map[uintptr]bool
+
+	// depth 当前递归深度
+	depth int
+
+	// path 当前序列化路径（例如：user.address.street）
+	path []string
+
+	// maxDepth 最大允许递归深度，从Options中传入
+	maxDepth int
 }
 
 // newEncodeContext 创建新的序列化上下文。
-func newEncodeContext() *encodeContext {
+func newEncodeContext(maxDepth int) *encodeContext {
 	return &encodeContext{
-		visited: make(map[uintptr]bool),
+		visited:  make(map[uintptr]bool),
+		depth:    0,
+		path:     make([]string, 0, 10), // 预分配一些容量，假设嵌套不会太深
+		maxDepth: maxDepth,
+	}
+}
+
+// PushPath 将字段名添加到当前路径
+func (ctx *encodeContext) PushPath(field string) {
+	ctx.path = append(ctx.path, field)
+}
+
+// PopPath 从当前路径移除最后一个字段名
+func (ctx *encodeContext) PopPath() {
+	if len(ctx.path) > 0 {
+		ctx.path = ctx.path[:len(ctx.path)-1]
+	}
+}
+
+// Path 返回当前路径的字符串表示
+func (ctx *encodeContext) Path() string {
+	// 空路径返回root
+	if len(ctx.path) == 0 {
+		return "root"
+	}
+
+	// 直接返回当前路径，不添加root前缀
+	// 以避免WrapError函数中重复添加root
+	return strings.Join(ctx.path, ".")
+}
+
+// IncDepth 增加当前深度，超过最大深度时返回错误
+func (ctx *encodeContext) IncDepth() error {
+	ctx.depth++
+	if ctx.depth > ctx.maxDepth {
+		return WrapError(ErrMaxDepth, ctx.Path())
+	}
+	return nil
+}
+
+// DecDepth 减少当前深度
+func (ctx *encodeContext) DecDepth() {
+	ctx.depth--
+	if ctx.depth < 0 {
+		ctx.depth = 0 // 防止异常情况
 	}
 }
