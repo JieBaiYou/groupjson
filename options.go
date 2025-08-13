@@ -1,10 +1,6 @@
 package groupjson
 
-import (
-	"strings"
-)
-
-// GroupMode 定义分组筛选的逻辑模式。
+// GroupMode 定义分组筛选逻辑。
 type GroupMode int
 
 const (
@@ -14,155 +10,64 @@ const (
 	ModeAnd
 )
 
+// DepthPolicy 控制超过最大深度时的行为。
+type DepthPolicy int
+
 const (
-	// DefaultMaxDepth 默认最大递归深度。
-	DefaultMaxDepth = 32
-	// DefaultTagKey 默认分组标签键名。
-	DefaultTagKey = "groups"
+	// DepthTruncate 超深度时截断（返回 nil 或空集合）。
+	DepthTruncate DepthPolicy = iota
+	// DepthError 超深度时报错。
+	DepthError
 )
 
-// Options 配置序列化行为的选项。
+// CutoffCollection 控制截断时集合的表示。
+type CutoffCollection int
+
+const (
+	// Null 集合被表示为 null。
+	Null CutoffCollection = iota
+	// Empty 集合被表示为空集合（[] 或 {}）。
+	Empty
+)
+
+const (
+	DefaultTagKey   = "groups"
+	DefaultMaxDepth = 32
+)
+
+// Options 控制序列化行为。
 type Options struct {
-	// Groups 要包含的分组名称列表。
+	// Groups 需要包含的分组名称列表；为空表示不输出任何分组受控字段。
 	Groups []string
-	// GroupMode 分组筛选逻辑（OR或AND）。
-	GroupMode GroupMode
-	// TagKey 自定义分组标签的键名。
+	// Mode 分组匹配模式：ModeOr（任一命中）或 ModeAnd（全部命中）。
+	Mode GroupMode
+	// TagKey 字段上用于声明分组的结构体标签键名，默认 "groups"。
 	TagKey string
-	// TopLevelKey 输出包装键，非空时JSON结果被包装在此键下。
+	// TopLevelKey 非空时，最终结果以该键包裹为顶层对象。
 	TopLevelKey string
-	// MaxDepth 最大递归深度，防止循环引用导致栈溢出。
+	// MaxDepth 最大递归深度（含根层，最小为 1），防止深嵌套或环导致资源耗尽。
 	MaxDepth int
+	// DepthPolicy 超出最大深度时的处理策略：截断或报错。
+	DepthPolicy DepthPolicy
+	// CutoffCollection 在截断模式下，集合类型超深度时使用 null 或空集合表示。
+	CutoffCollection CutoffCollection
+	// EscapeHTML 是否对 HTML 字符进行转义，保持与 encoding/json 行为一致可关闭。
+	EscapeHTML bool
+	// SortKeys 是否对 map 键进行排序（仅为测试/可读性，默认关闭）。
+	SortKeys bool
+	// AllowMapInput 顶层是否允许传入 map[string]any；值为结构体时按组编码，其它值透传。
+	AllowMapInput bool
+	// AllowSliceInput 顶层是否允许传入切片/数组；元素为结构体时按组编码，其它值透传。
+	AllowSliceInput bool
 }
 
-// DefaultOptions 返回默认选项配置。
+// DefaultOptions 返回默认选项。
 func DefaultOptions() Options {
 	return Options{
-		GroupMode: ModeOr,
-		TagKey:    DefaultTagKey,
-		MaxDepth:  DefaultMaxDepth,
+		Mode:             ModeOr,
+		TagKey:           DefaultTagKey,
+		MaxDepth:         DefaultMaxDepth,
+		DepthPolicy:      DepthTruncate,
+		CutoffCollection: Null,
 	}
-}
-
-// GroupJSON 分组JSON序列化器。
-type GroupJSON struct {
-	opts Options
-}
-
-// New 创建序列化器实例，使用默认选项。
-// 示例: groupjson.New().WithGroups("admin", "internal").Marshal(user)
-func New() *GroupJSON {
-	return &GroupJSON{
-		opts: DefaultOptions(),
-	}
-}
-
-// Default 使用指定分组序列化值。
-func Default(v any, groups ...string) ([]byte, error) {
-	return New().WithGroups(groups...).Marshal(v)
-}
-
-// WithGroups 设置要包含的分组名称。
-func (g *GroupJSON) WithGroups(groups ...string) *GroupJSON {
-	g.opts.Groups = groups
-	return g
-}
-
-// WithGroupMode 设置分组筛选逻辑模式。
-func (g *GroupJSON) WithGroupMode(mode GroupMode) *GroupJSON {
-	g.opts.GroupMode = mode
-	return g
-}
-
-// WithTagKey 设置自定义标签键名。
-func (g *GroupJSON) WithTagKey(tagKey string) *GroupJSON {
-	g.opts.TagKey = tagKey
-	return g
-}
-
-// WithTopLevelKey 设置结果的顶层包装键。
-func (g *GroupJSON) WithTopLevelKey(key string) *GroupJSON {
-	g.opts.TopLevelKey = key
-	return g
-}
-
-// WithMaxDepth 设置递归深度上限。
-func (g *GroupJSON) WithMaxDepth(depth int) *GroupJSON {
-	// 深度值至少为1
-	if depth < 1 {
-		depth = 1
-	}
-	g.opts.MaxDepth = depth
-	return g
-}
-
-// encodeContext 序列化上下文，跟踪单次序列化过程状态。
-type encodeContext struct {
-	// visited 已处理的指针地址集合，用于检测循环引用。
-	visited map[uintptr]bool
-
-	// depth 当前递归深度
-	depth int
-
-	// path 当前序列化路径（例如：user.address.street）
-	path []string
-
-	// maxDepth 最大允许递归深度，从Options中传入
-	maxDepth int
-}
-
-// newEncodeContext 创建新的序列化上下文。
-func newEncodeContext(maxDepth int) *encodeContext {
-	return &encodeContext{
-		visited:  make(map[uintptr]bool),
-		depth:    0,
-		path:     make([]string, 0, 10), // 预分配一些容量，假设嵌套不会太深
-		maxDepth: maxDepth,
-	}
-}
-
-// PushPath 将字段名添加到当前路径
-func (ctx *encodeContext) PushPath(field string) {
-	ctx.path = append(ctx.path, field)
-}
-
-// PopPath 从当前路径移除最后一个字段名
-func (ctx *encodeContext) PopPath() {
-	if len(ctx.path) > 0 {
-		ctx.path = ctx.path[:len(ctx.path)-1]
-	}
-}
-
-// Path 返回当前路径的字符串表示
-func (ctx *encodeContext) Path() string {
-	// 空路径返回root
-	if len(ctx.path) == 0 {
-		return "root"
-	}
-
-	// 直接返回当前路径，不添加root前缀
-	// 以避免WrapError函数中重复添加root
-	return strings.Join(ctx.path, ".")
-}
-
-// IncDepth 增加当前深度，超过最大深度时返回错误
-func (ctx *encodeContext) IncDepth() error {
-	ctx.depth++
-	if ctx.depth > ctx.maxDepth {
-		return WrapError(ErrMaxDepth, ctx.Path())
-	}
-	return nil
-}
-
-// DecDepth 减少当前深度
-func (ctx *encodeContext) DecDepth() {
-	ctx.depth--
-	if ctx.depth < 0 {
-		ctx.depth = 0 // 防止异常情况
-	}
-}
-
-// IsMaxDepthReached 检查是否达到最大深度
-func (ctx *encodeContext) IsMaxDepthReached() bool {
-	return ctx.depth >= ctx.maxDepth
 }

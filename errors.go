@@ -3,43 +3,26 @@ package groupjson
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
-// 库定义的错误类型
+// 错误常量
 var (
-	// ErrNilValue 传入nil值时的错误。
-	ErrNilValue = errors.New("groupjson: cannot marshal nil value")
-
-	// ErrInvalidValue 传入无效值类型时的错误。
-	ErrInvalidValue = errors.New("groupjson: value is not valid")
-
-	// ErrMaxDepth 超过最大递归深度时的错误。
-	ErrMaxDepth = errors.New("groupjson: exceeded maximum recursion depth")
-
-	// ErrInvalidType 传入非结构体类型时的错误。
-	ErrInvalidType = errors.New("groupjson: cannot marshal non-struct value")
-
-	// ErrGeneratorFail 代码生成失败时的错误。
-	ErrGeneratorFail = errors.New("groupjson: code generation failed")
-
-	// ErrCircularReference 检测到循环引用时的错误。
+	ErrNilValue          = errors.New("groupjson: cannot marshal nil value")
+	ErrInvalidType       = errors.New("groupjson: cannot marshal non-struct value")
+	ErrMaxDepth          = errors.New("groupjson: exceeded maximum recursion depth")
 	ErrCircularReference = errors.New("groupjson: circular reference detected")
-
-	// ErrUnsupportedType 不支持的类型错误。
-	ErrUnsupportedType = errors.New("groupjson: unsupported type for serialization")
-
-	// ErrNonStringMapKey Map键不是字符串类型的错误。
-	ErrNonStringMapKey = errors.New("groupjson: map key is not string type")
+	ErrUnsupportedType   = errors.New("groupjson: unsupported type for serialization")
+	ErrNonStringMapKey   = errors.New("groupjson: map key is not string type")
 )
 
-// Error 带位置信息的错误类型，用于精确定位问题。
+// Error 带路径的错误，用于在错误信息中携带精确位置
 type Error struct {
-	Err  error  // 原始错误
-	Path string // 错误位置路径
+	// Err 原始错误
+	Err error
+	// Path 发生错误的字段/索引路径，形如 a.b[3]["k"]
+	Path string
 }
 
-// Error 实现error接口，返回格式化的错误消息。
 func (e *Error) Error() string {
 	if e.Path != "" {
 		return fmt.Sprintf("%s at path %s", e.Err.Error(), e.Path)
@@ -47,26 +30,16 @@ func (e *Error) Error() string {
 	return e.Err.Error()
 }
 
-// Unwrap 支持errors.Is和errors.As的错误链。
-func (e *Error) Unwrap() error {
-	return e.Err
-}
+func (e *Error) Unwrap() error { return e.Err }
 
-// WrapError 包装错误并添加路径信息，便于定位问题来源。
+// WrapError 将错误与路径绑定；不做去重与合并，调用方应维护正确路径。
 func WrapError(err error, path string) *Error {
+	if err == nil {
+		return nil
+	}
 	if e, ok := err.(*Error); ok {
-		// 已经是包装过的错误
-		if e.Path == "" {
-			// 原错误没有路径，直接使用当前路径
+		if e.Path == "" && path != "" {
 			e.Path = path
-		} else if path != "" {
-			// 防止路径重复
-			if e.Path == path || strings.HasSuffix(e.Path, "."+path) || strings.HasPrefix(e.Path, path+".") {
-				// 路径已经包含在内，不需要添加
-			} else {
-				// 前置当前路径
-				e.Path = path + "." + e.Path
-			}
 		}
 		return e
 	}
