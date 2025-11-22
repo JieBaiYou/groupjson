@@ -221,10 +221,10 @@ func buildSchema(t reflect.Type, tagKey string) *schema {
 				}
 			}
 
-			if sf.Anonymous && (sf.Type.Kind() == reflect.Struct || (sf.Type.Kind() == reflect.Ptr && sf.Type.Elem().Kind() == reflect.Struct)) && (len(parts[0]) == 0) {
+			if sf.Anonymous && (sf.Type.Kind() == reflect.Struct || (sf.Type.Kind() == reflect.Pointer && sf.Type.Elem().Kind() == reflect.Struct)) && (len(parts[0]) == 0) {
 				// 匿名嵌入，按标准库进行字段提升
 				st := sf.Type
-				if st.Kind() == reflect.Ptr {
+				if st.Kind() == reflect.Pointer {
 					st = st.Elem()
 				}
 				base := append(append([]int(nil), it.index...), i)
@@ -271,7 +271,7 @@ func (e Encoder) encode(buf *bytes.Buffer, v reflect.Value, ctx *context) error 
 	}
 
 	// 处理 nil 指针/接口
-	if v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	if v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			buf.WriteString("null")
 			return nil
@@ -507,7 +507,7 @@ func (e Encoder) writeString(buf *bytes.Buffer, s string) {
 func fieldByIndex(v reflect.Value, index []int) reflect.Value {
 	for _, i := range index {
 		v = v.Field(i)
-		if v.Kind() == reflect.Ptr && !v.IsNil() {
+		if v.Kind() == reflect.Pointer && !v.IsNil() {
 			v = v.Elem()
 		}
 	}
@@ -575,7 +575,7 @@ func isEmptyValue(v reflect.Value) bool {
 		return v.Uint() == 0
 	case reflect.Float32, reflect.Float64:
 		return v.Float() == 0
-	case reflect.Interface, reflect.Ptr:
+	case reflect.Interface, reflect.Pointer:
 		return v.IsNil()
 	}
 	return false
