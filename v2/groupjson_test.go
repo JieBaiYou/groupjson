@@ -74,6 +74,20 @@ func (t TextMarshaler) MarshalText() ([]byte, error) {
 	return []byte("prefix_" + t.Val), nil
 }
 
+// PtrMarshaler 指针接收者实现 Marshaler
+type PtrMarshaler struct {
+	ID int
+}
+
+func (p *PtrMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"ptr_id":%d}`, p.ID)), nil
+}
+
+// Wrapper 用于测试结构体字段的 Addressable 接口检查
+type Wrapper struct {
+	Val PtrMarshaler `json:"val" groups:"public"`
+}
+
 // =============================================================================
 // 综合测试
 // =============================================================================
@@ -207,6 +221,18 @@ func TestMarshal_Comprehensive(t *testing.T) {
 			input:    map[string]TextMarshaler{"k": {Val: "val"}},
 			groups:   []string{"any"},
 			wantJSON: `{"k":"prefix_val"}`,
+		},
+		{
+			name:     "Ptr Marshaler (Top Level Pointer)",
+			input:    &PtrMarshaler{ID: 777},
+			groups:   []string{"any"},
+			wantJSON: `{"ptr_id":777}`,
+		},
+		{
+			name:     "Ptr Marshaler (Struct Field Addressable)",
+			input:    &Wrapper{Val: PtrMarshaler{ID: 666}}, // Must be pointer to be addressable
+			groups:   []string{"public"},
+			wantJSON: `{"val":{"ptr_id":666}}`,
 		},
 
 		// 7. 错误情况

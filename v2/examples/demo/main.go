@@ -80,6 +80,19 @@ type Log struct {
 	Time    CustomTime `json:"time" groups:"public"`
 }
 
+// PtrMarshaler 指针接收者实现 Marshaler
+type PtrMarshaler struct {
+	ID int
+}
+
+func (p *PtrMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"ptr_id":%d}`, p.ID)), nil
+}
+
+// Wrapper 用于测试结构体字段的 Addressable 接口检查
+type Wrapper struct {
+	Val PtrMarshaler `json:"val" groups:"public"`
+}
 // =============================================================================
 // 辅助函数
 // =============================================================================
@@ -239,6 +252,17 @@ func demoCircular() {
 	printDemo("错误处理 - 循环引用检测", n1, []string{"public"}, groupjson.ModeOr)
 }
 
+func demoPtrMarshaler() {
+	// Case 1: Top-level pointer to PtrMarshaler
+	ptrVal := &PtrMarshaler{ID: 123}
+	printDemo("接口 - 指针接收者Marshaler (顶层指针)", ptrVal, []string{"public"}, groupjson.ModeOr)
+
+	// Case 2: Wrapper struct with PtrMarshaler as a value field
+	// (需要传入Wrapper的地址才能使其内部字段可寻址)
+	w := &Wrapper{Val: PtrMarshaler{ID: 456}}
+	printDemo("接口 - 指针接收者Marshaler (结构体可寻址字段)", w, []string{"public"}, groupjson.ModeOr)
+}
+
 // =============================================================================
 // 主入口
 // =============================================================================
@@ -255,4 +279,5 @@ func main() {
 	demoCustomMarshaler()   // 6. 自定义接口
 	demoNestedPermissions() // 7. 嵌套结构体权限
 	demoCircular()          // 8. 错误处理
+	demoPtrMarshaler()      // 9. 指针接收者 Marshaler 修复演示
 }

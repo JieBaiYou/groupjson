@@ -113,14 +113,67 @@ func (ctx *encodeContext) encode(buf *bytes.Buffer, v reflect.Value) error {
 		return nil
 	}
 
-	// 处理接口和指针
-	if v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer {
+	// 0. 预处理指针和接口的 nil 情况
+	// 这一步必须在 Interface() 转换之前做，否则 typed nil 会导致问题
+	if v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			buf.WriteString("null")
 			return nil
 		}
+	}
+
+	// 1. 优先支持标准库接口: json.Marshaler
+	// 如果类型自定义了 JSON 序列化逻辑，直接使用它，不进行分组筛选。
+	// 检查当前值是否实现了 Marshaler
+	if v.CanInterface() {
+		if m, ok := v.Interface().(json.Marshaler); ok {
+			b, err := m.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			buf.Write(b)
+			return nil
+		}
+	}
+	// 检查指针是否实现了 Marshaler (针对 struct 字段是值类型但方法在指针上的情况)
+	if v.Kind() != reflect.Pointer && v.CanAddr() {
+		if m, ok := v.Addr().Interface().(json.Marshaler); ok {
+			b, err := m.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			buf.Write(b)
+			return nil
+		}
+	}
+
+	// 2. 优先支持标准库接口: encoding.TextMarshaler
+	if v.CanInterface() {
+		if m, ok := v.Interface().(encoding.TextMarshaler); ok {
+			text, err := m.MarshalText()
+			if err != nil {
+				return err
+			}
+			writeString(buf, string(text))
+			return nil
+		}
+	}
+	if v.Kind() != reflect.Pointer && v.CanAddr() {
+		if m, ok := v.Addr().Interface().(encoding.TextMarshaler); ok {
+			text, err := m.MarshalText()
+			if err != nil {
+				return err
+			}
+			writeString(buf, string(text))
+			return nil
+		}
+	}
+
+	// 3. 处理接口和指针 (递归解包)
+	// 注意：仅当上述接口未匹配时才执行此操作
+	if v.Kind() == reflect.Interface || v.Kind() == reflect.Pointer {
 		// 检测循环引用 (仅针对非空指针)
-		if v.Kind() == reflect.Pointer && !v.IsNil() {
+		if v.Kind() == reflect.Pointer {
 			ptr := v.Pointer()
 			if _, ok := ctx.visited[ptr]; ok {
 				return errors.New("groupjson: circular reference detected")
@@ -133,36 +186,7 @@ func (ctx *encodeContext) encode(buf *bytes.Buffer, v reflect.Value) error {
 		return ctx.encode(buf, v.Elem())
 	}
 
-	// 1. 优先支持标准库接口: json.Marshaler
-	// 如果类型自定义了 JSON 序列化逻辑，直接使用它，不进行分组筛选。
-	if v.CanInterface() {
-		if m, ok := v.Interface().(json.Marshaler); ok {
-			b, err := m.MarshalJSON()
-			if err != nil {
-				return err
-			}
-			// 标准库 MarshalJSON 返回的已经是合法的 JSON 字节，直接写入
-			// 注意：这里不进行 Compact，假设实现是正确的
-			buf.Write(b)
-			return nil
-		}
-	}
-
-	// 2. 优先支持标准库接口: encoding.TextMarshaler
-	// 如果类型实现了 TextMarshaler，将其文本输出作为 JSON 字符串。
-	if v.CanInterface() {
-		if m, ok := v.Interface().(encoding.TextMarshaler); ok {
-			text, err := m.MarshalText()
-			if err != nil {
-				return err
-			}
-			// 文本需作为 JSON 字符串输出 (带引号)
-			writeString(buf, string(text))
-			return nil
-		}
-	}
-
-	// 3. 根据类型分发处理
+	// 4. 根据类型分发处理
 	switch v.Kind() {
 	case reflect.Struct:
 		return ctx.encodeStruct(buf, v)
