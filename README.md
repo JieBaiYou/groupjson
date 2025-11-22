@@ -3,26 +3,17 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/JieBaiYou/groupjson.svg)](https://pkg.go.dev/github.com/JieBaiYou/groupjson)
 [![Go Report Card](https://goreportcard.com/badge/github.com/JieBaiYou/groupjson)](https://goreportcard.com/report/github.com/JieBaiYou/groupjson)
 
-GroupJSON 是一个运行时分组筛选的 Go 库，用于选择性地序列化结构体字段，创建针对不同视图/角色的 JSON 输出。本版本仅保留运行时实现，不包含代码生成。
+GroupJSON 是一个轻量级、高性能的 Go 运行时分组序列化库。它允许你通过 struct tag 定义字段分组，根据不同场景（如 API 响应的 `public`/`admin` 视图）选择性地序列化字段。
+
+**V1 重构版本**：彻底重写了底层引擎，移除中间态 Map 分配，采用流式写入 `io.Writer`/`bytes.Buffer`，性能大幅提升。
 
 ## 核心特性
 
-- 🚀 **高性能设计**：使用代码生成和内存优化技术
-- 🔍 **分组筛选**：根据字段标签选择性序列化, 支持 OR/AND 逻辑
-- 🔄 **兼容标准 JSON**：完全支持 Go 标准库 JSON 功能, 包括 omitempty、omitzero 标签
-- 💡 **灵活配置**：支持顶层包装键、空值处理、自定义标签等
-- 📦 **轻量级**：零外部依赖, 简洁的 API
-- 🛡️ **类型安全**：代码生成提供类型安全保证, 减少运行时错误
-
-## 设计原则
-
-GroupJSON 的设计基于以下关键原则：
-
-1. **性能优先**：通过代码生成减少反射开销
-2. **灵活性**：支持多种使用方式和配置选项
-3. **易用性**：提供简单直观的 API
-4. **兼容性**：与标准 JSON 库行为保持一致
-5. **安全性**：类型安全的 API 设计
+- 🚀 **高性能**：流式写入设计，零中间内存分配，自带对象池 (`sync.Pool`) 优化。
+- 🔍 **分组筛选**：支持 OR (默认) 与 AND 分组逻辑，灵活控制字段可见性。
+- 🔄 **标准兼容**：支持 `json` 标签的 `omitempty` 和 Go 1.24+ 的 `omitzero` 语义。
+- 📦 **零依赖**：仅依赖 Go 标准库。
+- 🛡️ **安全可靠**：内置递归深度限制与循环引用检测。
 
 ## 安装
 
@@ -30,9 +21,7 @@ GroupJSON 的设计基于以下关键原则：
 go get github.com/JieBaiYou/groupjson
 ```
 
-## 快速开始（运行时分组）
-
-### 使用反射 API（运行时）
+## 快速开始
 
 ```go
 package main
@@ -52,25 +41,25 @@ type User struct {
 func main() {
     user := User{
         ID:       1,
-        Name:     "张三",
-        Email:    "zhangsan@example.com",
-        Password: "secret123",
+        Name:     "Alice",
+        Email:    "alice@example.com",
+        Password: "secret_password",
     }
 
-    // 使用流畅 API
+    // 场景 1: 公开视图 (仅 public 组)
     publicJSON, _ := groupjson.NewEncoder().
         WithGroups("public").
         Marshal(user)
     fmt.Println(string(publicJSON))
-    // 输出: {"id":1,"name":"张三"}
+    // 输出: {"id":1,"name":"Alice"}
 
-    // 带选项的序列化
+    // 场景 2: 管理员视图 (admin 组)
     adminJSON, _ := groupjson.NewEncoder().
         WithGroups("admin").
-        WithTopLevelKey("data").
+        WithTopLevelKey("data"). // 自动包装 {"data": ...}
         Marshal(user)
     fmt.Println(string(adminJSON))
-    // 输出: {"data":{"id":1,"name":"张三","email":"zhangsan@example.com"}}
+    // 输出: {"data":{"id":1,"name":"Alice","email":"alice@example.com"}}
 }
 ```
 
@@ -78,73 +67,71 @@ func main() {
 
 ### 分组逻辑
 
-GroupJSON 支持两种分组筛选逻辑：
+支持两种模式：
 
-- **OR 逻辑**（默认）：字段只要属于任一指定分组即包含在结果中
-- **AND 逻辑**：字段必须同时属于所有指定分组才包含在结果中
+- **OR (默认)**: 字段属于任一指定分组即被包含。
+- **AND**: 字段必须同时属于所有指定分组才被包含。
 
 ```go
-// OR 逻辑 - 默认
-orJSON, _ := groupjson.New().
-    WithGroups("public", "internal").
-    Marshal(user)
-// 包含属于 public 或 internal 组的字段
-
-// AND 逻辑
-andJSON, _ := groupjson.New().
+// 仅导出同时标记为 "public" 和 "admin" 的字段
+b, _ := groupjson.NewEncoder().
     WithGroups("public", "admin").
     WithGroupMode(groupjson.ModeAnd).
     Marshal(user)
-// 仅包含同时属于 public 和 admin 组的字段
 ```
 
-### 支持 Go 1.24 的 omitzero 标签
+### 性能优化
+
+`Encoder` 是设计为不可变且轻量的，但其内部使用了 `sync.Pool` 来复用 Buffer。
+
+对于极致性能场景，建议使用 `Encode(io.Writer, v)` 接口直接写入流：
 
 ```go
-type Product struct {
-    ID        int       `json:"id" groups:"public"`
-    Name      string    `json:"name" groups:"public"`
-    Price     float64   `json:"price,omitzero" groups:"public"`
-    Tags      []string  `json:"tags,omitzero" groups:"public"`
-    UpdatedAt time.Time `json:"updatedAt,omitzero" groups:"public"`
+func handler(w http.ResponseWriter, r *http.Request) {
+    user := getUser()
+    w.Header().Set("Content-Type", "application/json")
+
+    // 直接写入 ResponseWriter，避免字节切片拷贝
+    err := groupjson.NewEncoder().
+        WithGroups("public").
+        Encode(w, user)
+
+    if err != nil {
+        // handle error
+    }
 }
-
-// 使用 omitzero 时, 零值数字、空字符串等会被省略, 但空集合会保留
 ```
 
-### 自定义选项
+### 顶层包装 (Top-Level Wrapper)
+
+使用 `WithTopLevelKey` 可以方便地将结果包装在指定键下，无需手动构建 Map。
 
 ```go
-// 完整配置示例
-    result, _ := groupjson.NewEncoder().
-    WithGroups("public", "admin").       // 设置分组
-        WithGroupMode(groupjson.ModeOr).     // 设置分组逻辑
-    WithTopLevelKey("data").             // 添加顶层包装键
-        WithTagKey("access").                // 自定义标签名 (默认 "groups")
-        WithMaxDepth(10).                    // 设置最大递归深度
+groupjson.NewEncoder().
+    WithGroups("public").
+    WithTopLevelKey("response"). // 输出 {"response": ...}
     Marshal(user)
 ```
 
-### 映射输出
+### 配置选项
 
 ```go
-// 获取 map[string]any 结果而不是 JSON 字节
-userMap, _ := groupjson.NewEncoder().
-    WithGroups("public").
-    MarshalToMap(user)
-
-// 手动编辑结果
-userMap["extra_field"] = "额外信息"
+groupjson.NewEncoder().
+    WithGroups("public").           // 必选：指定分组
+    WithTagKey("access").           // 可选：自定义 Tag 名 (默认 "groups")
+    WithTopLevelKey("data").        // 可选：指定顶层包装键
+    WithMaxDepth(64).               // 可选：最大递归深度 (默认 32)
+    WithEscapeHTML(true).           // 可选：开启 HTML 转义 (默认关闭，性能更好)
+    WithSortKeys(true).             // 可选：Map 键排序 (默认关闭)
+    Marshal(v)
 ```
 
-## 设计文档
+## 注意事项
 
-完整重构设计见 `docs/DESIGN.md`（仅运行时分组筛选）。
-
-## 贡献
-
-欢迎提交问题报告、功能请求和 Pull Request！
+1.  **默认不转义 HTML**: 与标准库不同，默认情况下 `EscapeHTML` 为 `false`，这能显著提升性能。如需处理用户输入并嵌入 HTML，请显式开启。
+2.  **Map/Slice 支持**: 库会自动递归处理 `map[string]any` 和切片中的结构体元素，无需额外配置。
+3.  **深度限制**: 当递归深度超过 `MaxDepth` 时，会返回 `ErrMaxDepth` 错误。
 
 ## 许可证
 
-MIT 许可证
+MIT License

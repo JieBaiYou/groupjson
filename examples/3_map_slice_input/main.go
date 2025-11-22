@@ -13,13 +13,15 @@ type User struct {
 
 func main() {
 	users := []User{{ID: 1, Name: "A"}, {ID: 2, Name: "B"}}
-	m, _ := gj.NewEncoder().AllowSlice(true).WithGroups("public").MarshalToMap(users)
-	fmt.Println("slice->map:", m)
+	// AllowSlice 已移除，默认支持
+	b, _ := gj.NewEncoder().WithGroups("public").Marshal(users)
+	fmt.Println("slice:", string(b))
 
 	in := map[string]any{"u": User{ID: 3, Name: "C"}, "note": "hi"}
-	m2, _ := gj.NewEncoder().AllowMap(true).WithGroups("public").MarshalToMap(in)
-	fmt.Println("map->map:", m2)
+	// AllowMap 已移除，默认支持
+	b2, _ := gj.NewEncoder().WithGroups("public").Marshal(in)
+	fmt.Println("map:", string(b2))
 }
 
-// slice->map: map[data:[map[id:1 name:A] map[id:2 name:B]]]
-// map->map: map[note:hi u:map[id:3 name:C]]
+// slice: [{"id":1,"name":"A"},{"id":2,"name":"B"}]
+// map: {"note":"hi","u":{"id":3,"name":"C"}}

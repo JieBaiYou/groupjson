@@ -19,8 +19,9 @@ func main() {
 	fmt.Println("public:", string(b))
 
 	b, _ = gj.NewEncoder().WithGroups("admin").WithTopLevelKey("data").Marshal(u)
+	// 使用 WithTopLevelKey 自动包装
 	fmt.Println("admin:", string(b))
 }
 
 // public: {"id":1,"name":"Alice"}
-// admin: {"data":{"email":"a@example.com","id":1,"name":"Alice"}}
+// admin: {"data":{"id":1,"name":"Alice","email":"a@example.com"}}

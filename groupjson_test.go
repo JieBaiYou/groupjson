@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -127,46 +126,43 @@ func TestAnonymousConflict(t *testing.T) {
 func TestMapAndSliceInput(t *testing.T) {
 	u := User{ID: 2, Name: "B", Addr: Address{City: "SZ"}}
 	m := map[string]any{"user": u, "note": "hi"}
-	out, err := NewEncoder().AllowMap(true).WithGroups("public").MarshalToMap(m)
+	// 默认支持 Map Input
+	b, err := NewEncoder().WithGroups("public").Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := out["note"]; !ok {
-		t.Fatalf("note should present")
+	s := string(b)
+	if !strings.Contains(s, "\"note\":\"hi\"") {
+		t.Fatalf("note should present: %s", s)
 	}
-	if um, ok := out["user"].(map[string]any); !ok || toInt(um["id"]) != 2 {
-		t.Fatalf("user should be encoded with groups: %+v", out["user"])
+	if !strings.Contains(s, "\"user\":{") || !strings.Contains(s, "\"id\":2") {
+		t.Fatalf("user should be encoded with groups: %s", s)
 	}
 
 	arr := []User{{ID: 1, Name: "a"}, {ID: 2, Name: "b"}}
-	amap, err := NewEncoder().AllowSlice(true).WithGroups("public").MarshalToMap(arr)
+	// 默认支持 Slice Input
+	b, err = NewEncoder().WithGroups("public").Marshal(arr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := amap["data"].([]any); !ok {
-		t.Fatalf("slice should wrapped into data key")
+	s = string(b)
+	if !strings.HasPrefix(s, "[") {
+		t.Fatalf("slice should be encoded as array: %s", s)
+	}
+	if !strings.Contains(s, "\"name\":\"a\"") {
+		t.Fatalf("items should be encoded: %s", s)
 	}
 }
 
 func TestDepthAndCircular(t *testing.T) {
-	// 深度截断
+	// 深度截断 -> 深度报错 (v2 行为变更)
 	u := User{ID: 1, Name: "A", Addr: Address{City: "SZ"}}
 	enc := NewEncoder().WithGroups("public").WithMaxDepth(1)
-	b, err := enc.Marshal(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// depth=1 仅根层
-	// depth=1：根层字段写入，下一层集合/对象被截断为 null
-	if !strings.Contains(string(b), "\"address\":null") {
-		t.Fatalf("address should be truncated to null: %s", string(b))
-	}
-
-	// 深度错误
-	_, err = enc.WithDepthPolicy(DepthError).Marshal(u)
+	_, err := enc.Marshal(u)
 	if err == nil {
 		t.Fatalf("expect depth error")
 	}
+	// 现在的默认行为是超过最大深度时报错
 
 	// 循环
 	a := &Node{Val: 1}
@@ -203,6 +199,9 @@ func TestTopLevelKeyAndEncode(t *testing.T) {
 	if !strings.HasPrefix(string(b), "{\"data\":") {
 		t.Fatalf("should wrap with top level key: %s", string(b))
 	}
+	if !strings.HasSuffix(string(b), "}") {
+		t.Fatalf("should end with brace: %s", string(b))
+	}
 
 	var buf bytes.Buffer
 	if err := enc.Encode(&buf, u); err != nil {
@@ -213,38 +212,37 @@ func TestTopLevelKeyAndEncode(t *testing.T) {
 	}
 }
 
+func TestEncode(t *testing.T) {
+	u := User{ID: 3, Name: "C"}
+	enc := NewEncoder().WithGroups("public")
+
+	var buf bytes.Buffer
+	if err := enc.Encode(&buf, u); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "\"id\":3") {
+		t.Fatalf("encode output mismatch: %s", buf.String())
+	}
+}
+
 func TestEscapeHTML(t *testing.T) {
 	type T struct {
 		S string `json:"s" groups:"public"`
 	}
 	v := T{S: "<tag> & \"quote\""}
 
-	// 默认不转义
+	// 默认不转义 -> 等等，json.Marshal 默认确实会转义。
+	// 我的选项默认值是 "EscapeHTML: false" (零值)
+	// 所以默认情况下 (false) -> 不转义。
 	b, _ := NewEncoder().WithGroups("public").Marshal(v)
 	if strings.Contains(string(b), "\\u003c") {
-		t.Fatalf("should not escape by default: %s", string(b))
+		t.Fatalf("should not escape by default (EscapeHTML=false): %s", string(b))
 	}
 
 	// 开启转义
 	b, _ = NewEncoder().WithGroups("public").WithEscapeHTML(true).Marshal(v)
 	if !strings.Contains(string(b), "\\u003c") {
 		t.Fatalf("should escape when enabled: %s", string(b))
-	}
-}
-
-func TestMarshalToMapAndCompare(t *testing.T) {
-	u := User{ID: 4, Name: "D", Addr: Address{City: "SZ"}, Tags: []string{"x", "y"}}
-	m, err := NewEncoder().WithGroups("public").MarshalToMap(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := json.Marshal(m)
-	b2, _ := NewEncoder().WithGroups("public").Marshal(u)
-	var a1, a2 any
-	_ = json.Unmarshal(b, &a1)
-	_ = json.Unmarshal(b2, &a2)
-	if !reflect.DeepEqual(a1, a2) {
-		t.Fatalf("map and marshal should be equivalent: %s vs %s", string(b), string(b2))
 	}
 }
 
@@ -283,7 +281,7 @@ func TestRawMessageAndBytes(t *testing.T) {
 	}
 }
 
-// Benchmarks
+// Benchmarks -> 基准测试
 
 func makeUsers(n int) []User {
 	out := make([]User, n)
@@ -335,7 +333,7 @@ func BenchmarkMarshalLargeSlice(b *testing.B) {
 	enc := NewEncoder().WithGroups("public")
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = enc.AllowSlice(true).MarshalToMap(users)
+		_, _ = enc.Marshal(users)
 	}
 }
 

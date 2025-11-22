@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding"
 	"encoding/json"
-	"fmt"
 	"io"
+	"math"
 	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -45,94 +47,64 @@ func (e Encoder) WithMaxDepth(n int) Encoder {
 	e.opts.MaxDepth = n
 	return e
 }
-func (e Encoder) WithDepthPolicy(p DepthPolicy) Encoder { e.opts.DepthPolicy = p; return e }
-func (e Encoder) WithCutoffCollection(c CutoffCollection) Encoder {
-	e.opts.CutoffCollection = c
-	return e
-}
 func (e Encoder) WithEscapeHTML(on bool) Encoder { e.opts.EscapeHTML = on; return e }
 func (e Encoder) WithSortKeys(on bool) Encoder   { e.opts.SortKeys = on; return e }
-func (e Encoder) AllowMap(on bool) Encoder       { e.opts.AllowMapInput = on; return e }
-func (e Encoder) AllowSlice(on bool) Encoder     { e.opts.AllowSliceInput = on; return e }
+
+var bufPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
 
 // Marshal 输出 JSON 字节。
-// 若设置 TopLevelKey，则以该键包裹结果对象。
 func (e Encoder) Marshal(v any) ([]byte, error) {
-	m, err := e.MarshalToMap(v)
-	if err != nil {
-		return nil, err
-	}
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+
 	if e.opts.TopLevelKey != "" {
-		m = map[string]any{e.opts.TopLevelKey: m}
+		buf.WriteByte('{')
+		e.writeString(buf, e.opts.TopLevelKey)
+		buf.WriteByte(':')
 	}
-	buf := bytes.Buffer{}
-	enc := json.NewEncoder(&buf)
-	if !e.opts.EscapeHTML {
-		enc.SetEscapeHTML(false)
-	}
-	if err := enc.Encode(m); err != nil {
+
+	if err := e.encode(buf, reflect.ValueOf(v), newContext(e.opts)); err != nil {
 		return nil, err
 	}
-	b := bytes.TrimRight(buf.Bytes(), "\n")
-	return b, nil
+
+	if e.opts.TopLevelKey != "" {
+		buf.WriteByte('}')
+	}
+
+	// 复制字节以避免复用 buffer 时的数据污染
+	return append([]byte(nil), buf.Bytes()...), nil
 }
 
 // Encode 直接写入 io.Writer，避免中间 []byte 拷贝。
 func (e Encoder) Encode(w io.Writer, v any) error {
-	m, err := e.MarshalToMap(v)
-	if err != nil {
+	// 为了复用 encode 逻辑，暂时先写入 buffer 再写入 writer
+	// 真正的流式优化可以在后续版本通过直接操作 writer 实现，
+	// 但考虑到很多 writer 是无缓冲的，先写入 buffer 也是一种优良实践。
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+
+	if e.opts.TopLevelKey != "" {
+		buf.WriteByte('{')
+		e.writeString(buf, e.opts.TopLevelKey)
+		buf.WriteByte(':')
+	}
+
+	if err := e.encode(buf, reflect.ValueOf(v), newContext(e.opts)); err != nil {
 		return err
 	}
+
 	if e.opts.TopLevelKey != "" {
-		m = map[string]any{e.opts.TopLevelKey: m}
-	}
-	enc := json.NewEncoder(w)
-	if !e.opts.EscapeHTML {
-		enc.SetEscapeHTML(false)
-	}
-	return enc.Encode(m)
-}
-
-// MarshalToMap 仅构建 map 结果，便于调用方在序列化前做二次加工。
-func (e Encoder) MarshalToMap(v any) (map[string]any, error) {
-	if v == nil {
-		return nil, ErrNilValue
-	}
-	val := reflect.ValueOf(v)
-	for val.Kind() == reflect.Ptr {
-		if val.IsNil() {
-			return nil, ErrNilValue
-		}
-		val = val.Elem()
+		buf.WriteByte('}')
 	}
 
-	switch val.Kind() {
-	case reflect.Struct:
-		ctx := newContext(e.opts)
-		return e.encodeStruct(ctx, val)
-	case reflect.Map:
-		if !e.opts.AllowMapInput {
-			return nil, ErrInvalidType
-		}
-		ctx := newContext(e.opts)
-		out, err := e.encodeMapTop(ctx, val)
-		if err != nil {
-			return nil, err
-		}
-		return out, nil
-	case reflect.Slice, reflect.Array:
-		if !e.opts.AllowSliceInput {
-			return nil, ErrInvalidType
-		}
-		ctx := newContext(e.opts)
-		arr, err := e.encodeSlice(ctx, val)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"data": arr}, nil
-	default:
-		return nil, ErrInvalidType
-	}
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 // ----- 上下文与缓存 -----
@@ -143,39 +115,18 @@ type context struct {
 	opts Options
 	// depth 当前递归深度
 	depth int
-	// path 当前字段路径（以 . 连接，数组与 map 键使用 [i]/["k"]）
-	path []string
 	// visited 指针身份访问集，用于循环检测
 	visited map[uintptr]struct{}
 }
 
 func newContext(opts Options) *context {
-	return &context{opts: opts, depth: 0, path: make([]string, 0, 8), visited: make(map[uintptr]struct{})}
-}
-
-func (c *context) push(field string) { c.path = append(c.path, field) }
-func (c *context) pop() {
-	if len(c.path) > 0 {
-		c.path = c.path[:len(c.path)-1]
-	}
-}
-
-func (c *context) pathStr() string {
-	var b strings.Builder
-	for i, seg := range c.path {
-		if i > 0 {
-			b.WriteByte('.')
-		}
-		b.WriteString(seg)
-	}
-	return b.String()
+	return &context{opts: opts, depth: 0, visited: make(map[uintptr]struct{})}
 }
 
 func (c *context) incDepth() error {
 	c.depth++
 	if c.depth > c.opts.MaxDepth {
-		// 始终返回错误信号，由调用方依据策略决定报错或截断
-		return WrapError(ErrMaxDepth, c.pathStr())
+		return ErrMaxDepth
 	}
 	return nil
 }
@@ -198,6 +149,8 @@ type fieldInfo struct {
 	name string
 	// jsonName 输出使用的 JSON 键名
 	jsonName string
+	// keyBytes 预计算的键名 JSON 字节，包含引号和冒号，如 "key":
+	keyBytes []byte
 	// index 反射字段索引路径（支持匿名提升）
 	index []int
 	// omitEmpty 是否应用 omitempty 省略规则
@@ -281,7 +234,21 @@ func buildSchema(t reflect.Type, tagKey string) *schema {
 
 			groups := strings.Split(sf.Tag.Get(tagKey), ",")
 			idx := append(append([]int(nil), it.index...), i)
-			fi := fieldInfo{name: sf.Name, jsonName: jname, index: idx, omitEmpty: omitEmpty, omitZero: omitZero, groups: groups, anonymous: sf.Anonymous}
+
+			// 预计算 keyBytes: "jsonName":
+			kb, _ := json.Marshal(jname)
+			kb = append(kb, ':')
+
+			fi := fieldInfo{
+				name:      sf.Name,
+				jsonName:  jname,
+				keyBytes:  kb,
+				index:     idx,
+				omitEmpty: omitEmpty,
+				omitZero:  omitZero,
+				groups:    groups,
+				anonymous: sf.Anonymous,
+			}
 			if prev, ok := seen[jname]; ok {
 				// 冲突：保留更浅层（先入队的），与 encoding/json 一致
 				_ = prev
@@ -297,13 +264,67 @@ func buildSchema(t reflect.Type, tagKey string) *schema {
 
 // ----- 编码实现 -----
 
-func (e Encoder) encodeStruct(ctx *context, v reflect.Value) (map[string]any, error) {
-	if err := ctx.incDepth(); err != nil {
-		if e.opts.DepthPolicy == DepthError {
-			return nil, err
+func (e Encoder) encode(buf *bytes.Buffer, v reflect.Value, ctx *context) error {
+	if !v.IsValid() {
+		buf.WriteString("null")
+		return nil
+	}
+
+	// 处理 nil 指针/接口
+	if v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			buf.WriteString("null")
+			return nil
 		}
-		// 截断：容器被置为 nil
-		return nil, nil
+		return e.encode(buf, v.Elem(), ctx)
+	}
+
+	// 优先使用 json.Marshaler / encoding.TextMarshaler
+	if m, ok := asJSONMarshaler(v); ok {
+		b, err := m.MarshalJSON()
+		if err != nil {
+			return err
+		}
+		buf.Write(b)
+		return nil
+	}
+	if tm, ok := asTextMarshaler(v); ok {
+		txt, err := tm.MarshalText()
+		if err != nil {
+			return err
+		}
+		e.writeString(buf, string(txt))
+		return nil
+	}
+
+	// 特殊：[]byte 遵循标准库编码为 base64 字符串
+	if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
+		b, err := json.Marshal(v.Interface())
+		if err != nil {
+			return err
+		}
+		buf.Write(b)
+		return nil
+	}
+
+	switch v.Kind() {
+	case reflect.Struct:
+		return e.encodeStruct(buf, v, ctx)
+	case reflect.Map:
+		return e.encodeMap(buf, v, ctx)
+	case reflect.Slice, reflect.Array:
+		return e.encodeSlice(buf, v, ctx)
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		return ErrUnsupportedType
+	default:
+		// 标量
+		return e.encodeScalar(buf, v)
+	}
+}
+
+func (e Encoder) encodeStruct(buf *bytes.Buffer, v reflect.Value, ctx *context) error {
+	if err := ctx.incDepth(); err != nil {
+		return err
 	}
 	defer ctx.decDepth()
 
@@ -311,7 +332,7 @@ func (e Encoder) encodeStruct(ctx *context, v reflect.Value) (map[string]any, er
 	if v.CanAddr() {
 		addr := v.Addr().Pointer()
 		if _, ok := ctx.visited[addr]; ok {
-			return nil, WrapError(ErrCircularReference, ctx.pathStr())
+			return ErrCircularReference
 		}
 		ctx.visited[addr] = struct{}{}
 		defer delete(ctx.visited, addr)
@@ -319,192 +340,167 @@ func (e Encoder) encodeStruct(ctx *context, v reflect.Value) (map[string]any, er
 
 	t := v.Type()
 	sch := getSchema(t, e.opts.TagKey)
-	out := make(map[string]any, len(sch.fields))
+
+	buf.WriteByte('{')
+	first := true
 
 	for _, f := range sch.fields {
-		if len(e.opts.Groups) == 0 {
-			continue
-		}
-		if !e.includeField(f.groups) {
+		if len(e.opts.Groups) > 0 && !e.includeField(f.groups) {
 			continue
 		}
 
 		fv := fieldByIndex(v, f.index)
-		name := f.jsonName
-		ctx.push(name)
-		val, omit, err := e.encodeValue(ctx, fv, f.omitEmpty, f.omitZero)
-		ctx.pop()
-		if err != nil {
-			return nil, WrapError(err, name)
-		}
-		if omit {
+
+		// 检查 omit 规则
+		if f.omitEmpty && isEmptyValue(fv) {
 			continue
 		}
-		out[name] = val
+		if f.omitZero && isZeroScalar(fv) {
+			continue
+		}
+
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+
+		buf.Write(f.keyBytes)
+		if err := e.encode(buf, fv, ctx); err != nil {
+			return err
+		}
 	}
 
-	if e.opts.SortKeys {
-		// 无需处理，json.Encoder 不保证顺序；排序由外层决定是否需要
-	}
-	return out, nil
+	buf.WriteByte('}')
+	return nil
 }
 
-func (e Encoder) encodeMapTop(ctx *context, v reflect.Value) (map[string]any, error) {
+func (e Encoder) encodeMap(buf *bytes.Buffer, v reflect.Value, ctx *context) error {
 	if v.IsNil() {
-		return nil, nil
+		buf.WriteString("null")
+		return nil
 	}
+	if err := ctx.incDepth(); err != nil {
+		return err
+	}
+	defer ctx.decDepth()
+
 	if v.Type().Key().Kind() != reflect.String {
-		return nil, WrapError(ErrNonStringMapKey, ctx.pathStr())
+		return ErrNonStringMapKey
 	}
-	out := make(map[string]any, v.Len())
-	iter := v.MapRange()
-	for iter.Next() {
-		k := iter.Key().String()
-		ctx.push(fmt.Sprintf("[\"%s\"]", k))
-		item := iter.Value()
-		val, _, err := e.encodeValue(ctx, item, false, false)
-		ctx.pop()
-		if err != nil {
-			return nil, WrapError(err, fmt.Sprintf("[\"%s\"]", k))
+
+	buf.WriteByte('{')
+
+	// 获取所有 key 并排序（如果需要）
+	keys := v.MapKeys()
+	if e.opts.SortKeys {
+		sort.Slice(keys, func(i, j int) bool {
+			return keys[i].String() < keys[j].String()
+		})
+	}
+
+	first := true
+	for _, key := range keys {
+		val := v.MapIndex(key)
+
+		if !first {
+			buf.WriteByte(',')
 		}
-		out[k] = val
+		first = false
+
+		// 写入 key
+		e.writeString(buf, key.String())
+		buf.WriteByte(':')
+
+		// 写入 value
+		if err := e.encode(buf, val, ctx); err != nil {
+			return err
+		}
 	}
-	return out, nil
+
+	buf.WriteByte('}')
+	return nil
 }
 
-func (e Encoder) encodeSlice(ctx *context, v reflect.Value) ([]any, error) {
+func (e Encoder) encodeSlice(buf *bytes.Buffer, v reflect.Value, ctx *context) error {
 	if v.Kind() == reflect.Slice && v.IsNil() {
-		return nil, nil
+		buf.WriteString("null")
+		return nil
 	}
+	if err := ctx.incDepth(); err != nil {
+		return err
+	}
+	defer ctx.decDepth()
+
+	buf.WriteByte('[')
 	n := v.Len()
-	out := make([]any, 0, n)
 	for i := 0; i < n; i++ {
-		ctx.push(fmt.Sprintf("[%d]", i))
-		val, _, err := e.encodeValue(ctx, v.Index(i), false, false)
-		ctx.pop()
-		if err != nil {
-			return nil, WrapError(err, fmt.Sprintf("[%d]", i))
+		if i > 0 {
+			buf.WriteByte(',')
 		}
-		out = append(out, val)
+		if err := e.encode(buf, v.Index(i), ctx); err != nil {
+			return err
+		}
 	}
-	return out, nil
+	buf.WriteByte(']')
+	return nil
 }
 
-func (e Encoder) encodeValue(ctx *context, v reflect.Value, omitEmpty, omitZero bool) (any, bool, error) {
-	// 处理 nil 指针
-	if v.Kind() == reflect.Ptr {
-		if v.IsNil() {
-			return nil, omitEmpty, nil
-		}
-		return e.encodeValue(ctx, v.Elem(), omitEmpty, omitZero)
-	}
-	// 解包 interface 值
-	if v.Kind() == reflect.Interface {
-		if v.IsNil() {
-			return nil, omitEmpty, nil
-		}
-		return e.encodeValue(ctx, v.Elem(), omitEmpty, omitZero)
-	}
-
-	// 通用接口：优先使用 json.Marshaler / encoding.TextMarshaler
-	if m, ok := asJSONMarshaler(v); ok {
-		b, err := m.MarshalJSON()
-		if err != nil {
-			return nil, false, err
-		}
-		var anyVal any
-		if err := json.Unmarshal(b, &anyVal); err != nil {
-			return nil, false, err
-		}
-		return anyVal, false, nil
-	}
-	if tm, ok := asTextMarshaler(v); ok {
-		txt, err := tm.MarshalText()
-		if err != nil {
-			return nil, false, err
-		}
-		if omitEmpty && len(txt) == 0 {
-			return nil, true, nil
-		}
-		return string(txt), false, nil
-	}
-
-	// 特殊：[]byte 遵循标准库编码为 base64 字符串
-	if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
-		if omitEmpty && v.Len() == 0 {
-			return nil, true, nil
-		}
-		return v.Interface(), false, nil
-	}
-
+func (e Encoder) encodeScalar(buf *bytes.Buffer, v reflect.Value) error {
 	switch v.Kind() {
-	case reflect.Struct:
-		m, err := e.encodeStruct(ctx, v)
-		return m, false, err
-	case reflect.Map:
-		if err := ctx.incDepth(); err != nil {
-			if e.opts.DepthPolicy == DepthError {
-				return nil, false, err
-			}
-			if e.opts.CutoffCollection == Empty {
-				return map[string]any{}, false, nil
-			}
-			return nil, false, nil
-		}
-		defer ctx.decDepth()
-		if v.Type().Key().Kind() != reflect.String {
-			return nil, false, WrapError(ErrNonStringMapKey, ctx.pathStr())
-		}
-		// omitempty 针对空 map 省略（nil 或 len==0）
-		if omitEmpty {
-			if v.IsNil() || v.Len() == 0 {
-				return nil, true, nil
+	case reflect.String:
+		e.writeString(buf, v.String())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		buf.WriteString(strconv.FormatInt(v.Int(), 10))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		buf.WriteString(strconv.FormatUint(v.Uint(), 10))
+	case reflect.Float32, reflect.Float64:
+		// 模仿 json 标准库的 float 格式化
+		f := v.Float()
+		if json.Valid([]byte(strconv.FormatFloat(f, 'f', -1, 64))) {
+			// 简单的校验不够，标准库有更复杂的逻辑处理 NaN/Inf
+			// 直接用 strconv 即可，但 NaN/Inf 会生成无效 JSON。
+			// 标准库 json 会报错：UnsupportedValueError
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return &json.UnsupportedValueError{Value: v, Str: strconv.FormatFloat(f, 'g', -1, 64)}
 			}
 		}
-		// 普通 map：递归编码值
-		out := make(map[string]any, v.Len())
-		iter := v.MapRange()
-		for iter.Next() {
-			k := iter.Key().String()
-			ctx.push(fmt.Sprintf("[\"%s\"]", k))
-			val, _, err := e.encodeValue(ctx, iter.Value(), false, false)
-			ctx.pop()
-			if err != nil {
-				return nil, false, WrapError(err, fmt.Sprintf("[\"%s\"]", k))
-			}
-			out[k] = val
+		// 使用 -1 让 strconv 自动选择最简格式
+		// 标准 json 库对 float64 使用 'g', -1, 64，对 float32 使用 32
+		bitSize := 64
+		if v.Kind() == reflect.Float32 {
+			bitSize = 32
 		}
-		return out, false, nil
-	case reflect.Slice, reflect.Array:
-		if err := ctx.incDepth(); err != nil {
-			if e.opts.DepthPolicy == DepthError {
-				return nil, false, err
-			}
-			if e.opts.CutoffCollection == Empty {
-				return []any{}, false, nil
-			}
-			return nil, false, nil
+		buf.WriteString(strconv.FormatFloat(f, 'g', -1, bitSize))
+	case reflect.Bool:
+		if v.Bool() {
+			buf.WriteString("true")
+		} else {
+			buf.WriteString("false")
 		}
-		defer ctx.decDepth()
-		// omitempty 针对空集合省略
-		if omitEmpty {
-			if (v.Kind() == reflect.Slice && v.IsNil()) || v.Len() == 0 {
-				return nil, true, nil
-			}
-		}
-		arr, err := e.encodeSlice(ctx, v)
-		return arr, false, err
-	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		return nil, false, WrapError(ErrUnsupportedType, ctx.pathStr())
 	default:
-		// 标量 + 省略策略
-		if omitEmpty && v.IsZero() {
-			return nil, true, nil
+		return ErrUnsupportedType // 支持的标量类型不应到达此处
+	}
+	return nil
+}
+
+// writeString 写入字符串，根据 EscapeHTML 选项决定转义策略
+func (e Encoder) writeString(buf *bytes.Buffer, s string) {
+	if e.opts.EscapeHTML {
+		b, _ := json.Marshal(s)
+		buf.Write(b)
+	} else {
+		// 使用 Encoder 关闭 HTML 转义
+		// 这种方式略慢，但为了正确性。
+		// 可以考虑优化：手动检查是否含有 HTML 字符，没有则直接 json.Marshal
+		// 既然是 debloat，先用正确的方法。
+		start := buf.Len()
+		enc := json.NewEncoder(buf)
+		enc.SetEscapeHTML(false)
+		enc.Encode(s)
+		// Encode 增加了一个换行符，需要移除
+		if buf.Len() > start {
+			buf.Truncate(buf.Len() - 1)
 		}
-		if omitZero && isZeroScalar(v) {
-			return nil, true, nil
-		}
-		return v.Interface(), false, nil
 	}
 }
 
@@ -564,6 +560,25 @@ func isZeroScalar(v reflect.Value) bool {
 	default:
 		return false
 	}
+}
+
+// isEmptyValue 模仿 encoding/json 的实现，用于 omitempty
+func isEmptyValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return v.Len() == 0
+	case reflect.Bool:
+		return !v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return v.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return v.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return v.Float() == 0
+	case reflect.Interface, reflect.Ptr:
+		return v.IsNil()
+	}
+	return false
 }
 
 // asJSONMarshaler 尝试提取 json.Marshaler 接口

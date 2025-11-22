@@ -28,10 +28,12 @@ func main() {
 	b, _ := gj.NewEncoder().WithGroups("admin").Marshal(it)
 	fmt.Println("full:", string(b))
 
-	// 深度限制
-	b, _ = gj.NewEncoder().WithGroups("admin").WithMaxDepth(2).Marshal(it)
-	fmt.Println("depth=2:", string(b))
+	// 深度限制 - 超过深度会报错
+	_, err := gj.NewEncoder().WithGroups("admin").WithMaxDepth(1).Marshal(it)
+	if err != nil {
+		fmt.Println("depth=1 error:", err)
+	}
 }
 
 // full: {"child":{"id":2,"name":"child","version":0},"id":1,"name":"root","version":1}
-// depth=1: {"child":{"id":2,"name":"child","version":0},"id":1,"name":"root","version":1}
+// depth=1 error: groupjson: exceeded maximum recursion depth
